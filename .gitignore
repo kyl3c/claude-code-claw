@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+data/
+.playwright-mcp/
+.claude/settings.local.json
+plans/

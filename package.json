@@ -1,0 +1,14 @@
+{
+  "name": "cc-remote-agent",
+  "type": "module",
+  "scripts": {
+    "start": "tsx --env-file=.env src/main.ts"
+  },
+  "dependencies": {
+    "@google-apps/chat": "^0.22.0",
+    "@google-cloud/pubsub": "^5.2.3",
+    "cron-parser": "^5.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
