@@ -92,11 +92,21 @@ function callClaude(input: string, spaceName: string): string {
   }
   args.push(input);
 
-  const output = execFileSync('claude', args, {
-    timeout: 5 * 60 * 1000,
-    encoding: 'utf-8',
-    cwd: process.cwd(),
-  });
+  let output: string;
+  try {
+    output = execFileSync('claude', args, {
+      timeout: 5 * 60 * 1000,
+      encoding: 'utf-8',
+      cwd: process.cwd(),
+    });
+  } catch (err) {
+    if (sessionId) {
+      console.log(`[${spaceName}] session ${sessionId} is stale, retrying without resume`);
+      deleteSession(spaceName);
+      return callClaude(input, spaceName);
+    }
+    throw err;
+  }
 
   const parsed = JSON.parse(output);
 
@@ -105,6 +115,12 @@ function callClaude(input: string, spaceName: string): string {
   }
 
   return parsed.result || output;
+}
+
+class StaleSessionError extends Error {
+  constructor(code: number | null) {
+    super(`Claude process exited with code ${code} and no output`);
+  }
 }
 
 interface StreamResult {
@@ -179,7 +195,7 @@ async function callClaudeStreaming(
       } else if (accumulated) {
         resolve({ text: accumulated, sessionId: resultSessionId });
       } else {
-        reject(new Error(`Claude process exited with code ${code} and no output`));
+        reject(new StaleSessionError(code));
       }
     });
 
@@ -234,7 +250,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       let lastUpdate = 0;
       const UPDATE_INTERVAL = 1500;
 
-      const { text, sessionId } = await callClaudeStreaming(input, spaceName, (partial) => {
+      const onUpdate = (partial: string) => {
         const now = Date.now();
         if (now - lastUpdate < UPDATE_INTERVAL) return;
         lastUpdate = now;
@@ -250,7 +266,22 @@ async function handleEvent(event: ChatEvent): Promise<void> {
           message: { name: messageName, text: displayText },
           updateMask: { paths: ['text'] },
         }).catch((err: any) => console.error('Failed to update message:', err));
-      });
+      };
+
+      let result: StreamResult;
+      try {
+        result = await callClaudeStreaming(input, spaceName, onUpdate);
+      } catch (err) {
+        if (err instanceof StaleSessionError && getSession(spaceName)) {
+          console.log(`[${spaceName}] session is stale, retrying without resume`);
+          deleteSession(spaceName);
+          result = await callClaudeStreaming(input, spaceName, onUpdate);
+        } else {
+          throw err;
+        }
+      }
+
+      const { text, sessionId } = result;
 
       console.log(`[streaming] done: ${text.length} chars, sessionId=${sessionId}`);
 
