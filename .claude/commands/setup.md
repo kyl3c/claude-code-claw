@@ -78,6 +78,7 @@ Ask me to confirm when this is done before continuing.
 cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
+mkdir -p data/workspace
 ```
 
 Fill in `.env` with the values from the previous steps:
