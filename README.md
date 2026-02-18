@@ -4,6 +4,8 @@ An [OpenClaw](https://github.com/openclaw/openclaw) style bot powered by [Claude
 
 As with all software, there are risks to running this. You are responsible for mitigating them. This is just a proof of concept inspired by the [NanoClaw](https://github.com/qwibitai/nanoclaw) project (a smaller codebase OpenClaw with containerization by default).
 
+**Do not run this on your main computer.** Use an isolated machine (VM, container, cloud instance) with least-privilege access. This bot executes Claude Code with tool-use capabilities — treat it like any other agent that can run arbitrary commands.
+
 It's not currently self-editing like OpenClaw. I like it this way for security/reliability, but I can understand why some people like it.
 
 ## Features
@@ -160,13 +162,11 @@ Each entry defines a server name and the command to launch it via stdio transpor
 ```json
 {
   "mcpServers": {
-    "whoop": {
-      "command": "python3",
-      "args": ["/path/to/whoop_mcp.py"]
-    },
-    "weather": {
-      "command": "node",
-      "args": ["/path/to/weather-server/index.js"]
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
     }
   }
 }

@@ -88,7 +88,69 @@ Ask me whether I want to enable streaming responses (`STREAM_RESPONSES=true`) �
 
 Then explain that `CLAUDE.md` contains project-level instructions for Claude and `SOUL.md` defines the bot's personality and tone. Ask if I want to customize either one now or keep the defaults.
 
-## Step 7: Install and Run
+## Step 7: Configure Tool Permissions
+
+Now let's set up `.claude/settings.json` so the bot has the right tool permissions.
+
+### Discover MCP Servers
+
+Read `.mcp.json` in the project root to find all configured MCP servers. For each server, show the user:
+- The server name
+- The command it runs (so they can understand what it does)
+
+Ask: "Which of these MCP servers do you want to allow the bot to use? You can pick all, some, or none."
+
+For each server they approve, we'll need to discover its tools. Since we can't query the server at setup time, ask the user if they want to:
+1. **Allow all tools** from that server — use a note that they can refine later
+2. **Skip it** for now
+
+Collect the list of approved server names.
+
+### Built-in Tool Permissions
+
+Ask the user which built-in Claude Code permissions they want to enable (suggest all as defaults):
+- `Read(**)` — allow reading any file in the project
+- `WebSearch` — allow web searches
+- `WebFetch` — allow fetching web content
+- `Bash(git log:*)` — allow viewing git history
+
+### Edit Permissions
+
+Ask: "Which directories should the bot be able to edit files in?"
+
+Suggest these defaults:
+- `Edit(data/schedules.json)` — required for the scheduler
+- `Edit(data/workspace/**)` — general workspace for the bot
+
+Let them add additional paths if they want (e.g., `Edit(src/**)` for code editing).
+
+### Generate settings.json
+
+Create `.claude/settings.json` with this structure:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      // MCP tools: for each approved server, add a comment and its tools
+      // Built-in permissions they chose
+      // Edit permissions they chose
+    ],
+    "deny": [],
+    "ask": []
+  },
+  "enableAllProjectMcpServers": true
+}
+```
+
+For MCP servers where the user chose "allow all tools", add a note that they should run the bot once, check what tools are available, and refine the list if needed. For now, leave a placeholder comment in the file explaining this.
+
+**Important**: Since we can't enumerate MCP tools at setup time, tell the user:
+> "After first run, you can check which tools each server offers and add them explicitly to the allow list. For now, Claude will prompt you to approve each tool the first time it's used — you can then add approved ones to settings.json."
+
+Write the file and confirm it looks correct before continuing.
+
+## Step 8: Install and Run
 
 ```bash
 npm install
@@ -97,7 +159,7 @@ npm start
 
 Verify that the console shows "Listening on ..." without any errors. If there are errors, help me troubleshoot.
 
-## Step 8: Test
+## Step 9: Test
 
 1. In Google Chat, search for the bot by the app name from Step 5
 2. Add it to a space or start a DM with it
