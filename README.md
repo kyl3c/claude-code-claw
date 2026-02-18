@@ -1,6 +1,8 @@
 # claude-code-claw
 
-A Google Chat bot powered by [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. It bridges Google Chat messages to Claude via Pub/Sub, giving you a persistent AI assistant that lives in your chat spaces — with full access to Claude Code's tool-use capabilities.
+An [OpenClaw](https://github.com/openclaw/openclaw) style bot powered by [Claude Code](https://docs.anthropic.com/en/docs/claude-code). It bridges Google Chat messages to Claude via Pub/Sub, giving you a persistent AI assistant with full access to Claude Code's tool-use capabilities, memory, etc. 
+
+As with all software, there are risks to running this. You are responsible for mitigating them. This is just a proof of concept inspired by the [NanoClaw](https://github.com/qwibitai/nanoclaw) project (a smaller codebase OpenClaw with containerization by default).
 
 ## Features
 
