@@ -40,6 +40,7 @@ if (!SUBSCRIPTION) {
 
 const MAX_MESSAGE_LENGTH = 4096;
 const STREAM = process.env.STREAM_RESPONSES === 'true';
+const MODEL = process.env.ANTHROPIC_MODEL || 'sonnet';
 
 // --- Clients ---
 
@@ -86,7 +87,7 @@ const SOUL_PATH = 'SOUL.md';
 
 function callClaude(input: string, spaceName: string): string {
   const sessionId = getSession(spaceName);
-  const args = ['-p', '--output-format', 'json', '--append-system-prompt-file', SOUL_PATH];
+  const args = ['-p', '--model', MODEL, '--output-format', 'json', '--append-system-prompt-file', SOUL_PATH];
   if (sessionId) {
     args.push('--resume', sessionId);
   }
@@ -134,7 +135,7 @@ async function callClaudeStreaming(
   onUpdate: (text: string) => void,
 ): Promise<StreamResult> {
   const sessionId = getSession(spaceName);
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--append-system-prompt-file', SOUL_PATH];
+  const args = ['-p', '--model', MODEL, '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--append-system-prompt-file', SOUL_PATH];
   if (sessionId) {
     args.push('--resume', sessionId);
   }
@@ -335,7 +336,7 @@ async function main(): Promise<void> {
     console.error('Pub/Sub subscription error:', err);
   });
 
-  startSchedulerLoop(sendMessage);
+  startSchedulerLoop(sendMessage, MODEL);
 
   console.log(`Listening on ${SUBSCRIPTION}`);
 }

@@ -3,7 +3,9 @@ dist/
 .env
 data/
 .playwright-mcp/
+.claude/settings.json
 .claude/settings.local.json
+.mcp.json
 plans/
 CLAUDE.md
 SOUL.md
