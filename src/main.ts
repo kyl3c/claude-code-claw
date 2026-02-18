@@ -41,6 +41,7 @@ if (!SUBSCRIPTION) {
 const MAX_MESSAGE_LENGTH = 4096;
 const STREAM = process.env.STREAM_RESPONSES === 'true';
 const MODEL = process.env.ANTHROPIC_MODEL || 'sonnet';
+const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 1000;
 
 // --- Clients ---
 
@@ -96,7 +97,7 @@ function callClaude(input: string, spaceName: string): string {
   let output: string;
   try {
     output = execFileSync('claude', args, {
-      timeout: 5 * 60 * 1000,
+      timeout: CLAUDE_TIMEOUT_MS,
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
@@ -152,8 +153,8 @@ async function callClaudeStreaming(
 
     const timeout = setTimeout(() => {
       proc.kill();
-      reject(new Error('Claude streaming timed out after 5 minutes'));
-    }, 5 * 60 * 1000);
+      reject(new Error(`Claude streaming timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
+    }, CLAUDE_TIMEOUT_MS);
 
     function processLine(line: string) {
       if (!line.trim()) return;
@@ -336,7 +337,7 @@ async function main(): Promise<void> {
     console.error('Pub/Sub subscription error:', err);
   });
 
-  startSchedulerLoop(sendMessage, MODEL);
+  startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS);
 
   console.log(`Listening on ${SUBSCRIPTION}`);
 }
