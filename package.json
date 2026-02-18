@@ -1,5 +1,5 @@
 {
-  "name": "cc-remote-agent",
+  "name": "claude-code-claw",
   "type": "module",
   "scripts": {
     "start": "tsx --env-file=.env src/main.ts"

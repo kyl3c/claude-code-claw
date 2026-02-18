@@ -1,4 +1,4 @@
-# cc-remote-agent
+# claude-code-claw
 
 A Google Chat bot powered by [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI. It bridges Google Chat messages to Claude via Pub/Sub, giving you a persistent AI assistant that lives in your chat spaces — with full access to Claude Code's tool-use capabilities.
 
@@ -13,7 +13,7 @@ A Google Chat bot powered by [Claude Code](https://docs.anthropic.com/en/docs/cl
 ## How It Works
 
 ```
-Google Chat → Pub/Sub Topic → cc-remote-agent → Claude Code CLI → Google Chat API
+Google Chat → Pub/Sub Topic → claude-code-claw → Claude Code CLI → Google Chat API
 ```
 
 1. A Google Chat app is configured to publish events to a Pub/Sub topic

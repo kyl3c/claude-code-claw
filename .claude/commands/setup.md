@@ -1,4 +1,4 @@
-Guide me through the full setup of cc-remote-agent. Walk through each step interactively, checking for success before moving on. If anything fails, help me troubleshoot before continuing.
+Guide me through the full setup of claude-code-claw. Walk through each step interactively, checking for success before moving on. If anything fails, help me troubleshoot before continuing.
 
 ## Step 1: Check Prerequisites
 
