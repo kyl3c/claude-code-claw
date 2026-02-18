@@ -88,13 +88,33 @@ Ask me whether I want to enable streaming responses (`STREAM_RESPONSES=true`) â€
 
 Then explain that `CLAUDE.md` contains project-level instructions for Claude and `SOUL.md` defines the bot's personality and tone. Ask if I want to customize either one now or keep the defaults.
 
-## Step 7: Configure Tool Permissions
+## Step 7: Configure MCP Servers
 
-Now let's set up `.claude/settings.json` so the bot has the right tool permissions.
+MCP (Model Context Protocol) servers give the bot access to external tools and services. The config file `.mcp.json` is gitignored since it contains local paths.
+
+Start by copying the example:
+```bash
+cp .mcp.example.json .mcp.json
+```
+
+Explain that each MCP server entry needs:
+- A name (the key)
+- A `command` to run (e.g., `npx`, `node`, `python3`)
+- `args` for that command
+
+Ask: "Do you want to add any MCP servers now? Common examples include Playwright (browser automation), or custom servers you've built. You can always add more later by editing `.mcp.json`."
+
+For each server they want to add, collect the command and args, then write the entry into `.mcp.json`.
+
+If they don't want to add any, that's fine â€” leave the example server or clear it to an empty `"mcpServers": {}`.
+
+## Step 8: Configure Tool Permissions
+
+Now let's set up `.claude/settings.json` so the bot has the right tool permissions. This file is gitignored since it contains machine-specific settings.
 
 ### Discover MCP Servers
 
-Read `.mcp.json` in the project root to find all configured MCP servers. For each server, show the user:
+If `.mcp.json` has servers configured, read it and show the user each server:
 - The server name
 - The command it runs (so they can understand what it does)
 
@@ -105,6 +125,8 @@ For each server they approve, we'll need to discover its tools. Since we can't q
 2. **Skip it** for now
 
 Collect the list of approved server names.
+
+If `.mcp.json` has no servers, skip the MCP discovery and move on to built-in permissions.
 
 ### Built-in Tool Permissions
 
@@ -150,7 +172,7 @@ For MCP servers where the user chose "allow all tools", add a note that they sho
 
 Write the file and confirm it looks correct before continuing.
 
-## Step 8: Install and Run
+## Step 9: Install and Run
 
 ```bash
 npm install
@@ -159,7 +181,7 @@ npm start
 
 Verify that the console shows "Listening on ..." without any errors. If there are errors, help me troubleshoot.
 
-## Step 9: Test
+## Step 10: Test
 
 1. In Google Chat, search for the bot by the app name from Step 5
 2. Add it to a space or start a DM with it
