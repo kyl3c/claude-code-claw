@@ -259,7 +259,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
 
         let displayText = partial;
         if (displayText.length > MAX_MESSAGE_LENGTH) {
-          displayText = displayText.slice(0, MAX_MESSAGE_LENGTH - 3) + '...';
+          displayText = '...' + displayText.slice(-(MAX_MESSAGE_LENGTH - 3));
         }
 
         console.log(`[streaming] updating message (${displayText.length} chars)`);
