@@ -4,6 +4,8 @@ An [OpenClaw](https://github.com/openclaw/openclaw) style bot powered by [Claude
 
 As with all software, there are risks to running this. You are responsible for mitigating them. This is just a proof of concept inspired by the [NanoClaw](https://github.com/qwibitai/nanoclaw) project (a smaller codebase OpenClaw with containerization by default).
 
+It's not currently self-editing like OpenClaw. I like it this way for security/reliability, but I can understand why some people like it.
+
 ## Features
 
 - **Persistent sessions** — each Chat space maintains its own conversation history with Claude
@@ -137,6 +139,40 @@ data/            # Runtime data (gitignored)
 
 - **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds. (Copied from `SOUL.example.md` during setup, gitignored so your edits stay local.)
 - **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here. (Copied from `CLAUDE.example.md` during setup, gitignored so your edits stay local.)
+
+## Adding MCP Servers
+
+You can extend the bot with [MCP servers](https://modelcontextprotocol.io/) to give Claude access to additional tools (APIs, databases, services, etc.). Add a `.mcp.json` file to the project root:
+
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "python3",
+      "args": ["/path/to/my_mcp_server.py"]
+    }
+  }
+}
+```
+
+Each entry defines a server name and the command to launch it via stdio transport. You can add multiple servers:
+
+```json
+{
+  "mcpServers": {
+    "whoop": {
+      "command": "python3",
+      "args": ["/path/to/whoop_mcp.py"]
+    },
+    "weather": {
+      "command": "node",
+      "args": ["/path/to/weather-server/index.js"]
+    }
+  }
+}
+```
+
+You may also need to allow the MCP tools in `.claude/settings.local.json` under `permissions.allow` (e.g., `"mcp__my-server__my_tool"`). The `.mcp.json` file can be checked in to share servers across deployments, or added to `.gitignore` if your setup is specific to your machine.
 
 ## License
 
