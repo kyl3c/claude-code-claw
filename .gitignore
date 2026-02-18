@@ -5,3 +5,5 @@ data/
 .playwright-mcp/
 .claude/settings.local.json
 plans/
+CLAUDE.md
+SOUL.md

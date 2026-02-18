@@ -35,6 +35,7 @@ This walks you through the entire GCP configuration step by step. For manual set
 
 - [Node.js](https://nodejs.org/) 18+
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- A [Google Workspace](https://workspace.google.com/) account — **Google Chat apps require Google Workspace**; free consumer Gmail accounts (`@gmail.com`) do not have access to the Google Chat API
 - A [Google Cloud](https://cloud.google.com/) project with billing enabled
 - [gcloud CLI](https://cloud.google.com/sdk/docs/install) installed and authenticated
 
@@ -77,16 +78,19 @@ gcloud iam service-accounts keys create service-account-key.json \
 2. Set **App name**, **Description**, and optionally an **Avatar URL**
 3. Under **Functionality**, enable "Receive 1:1 messages" and "Join spaces and group conversations"
 4. Under **Connection settings**, select **Cloud Pub/Sub** and enter your topic: `projects/YOUR_PROJECT_ID/topics/chat-bot`
-5. Set **Visibility** to your preference
-6. Click **Save**
+5. Under **Visibility**, check the box for "Make this Chat app available to specific people and groups in yourWorkspace"
+6. Type your email in the input box below
+7. Click **Save**
 
 ### 5. Configure Environment
 
 ```bash
 cp .env.example .env
+cp CLAUDE.example.md CLAUDE.md
+cp SOUL.example.md SOUL.md
 ```
 
-Edit `.env` with your values (see [Configuration](#configuration) below).
+Edit `.env` with your values (see [Configuration](#configuration) below). Edit `CLAUDE.md` and `SOUL.md` to customize the bot's instructions and personality.
 
 ### 6. Install and Run
 
@@ -129,8 +133,8 @@ data/            # Runtime data (gitignored)
 
 ## Customization
 
-- **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds.
-- **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here.
+- **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds. (Copied from `SOUL.example.md` during setup, gitignored so your edits stay local.)
+- **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here. (Copied from `CLAUDE.example.md` during setup, gitignored so your edits stay local.)
 
 ## License
 
