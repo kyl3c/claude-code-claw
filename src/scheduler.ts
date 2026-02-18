@@ -34,7 +34,7 @@ function persist(): void {
 }
 
 function computeNextRun(cron: string): string {
-  const interval = CronExpressionParser.parse(cron);
+  const interval = CronExpressionParser.parse(cron, { tz: 'UTC' });
   return interval.next()!.toISOString() as string;
 }
 
@@ -90,7 +90,8 @@ export function handleScheduleCommand(
 }
 
 export function startSchedulerLoop(
-  sendFn: (spaceName: string, text: string) => Promise<void>
+  sendFn: (spaceName: string, text: string) => Promise<void>,
+  model: string,
 ): void {
   async function tick() {
     const now = new Date();
@@ -100,7 +101,7 @@ export function startSchedulerLoop(
 
       console.log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
       try {
-        const output = execFileSync('claude', ['-p', '--output-format', 'json', '--append-system-prompt-file', 'SOUL.md', schedule.prompt], {
+        const output = execFileSync('claude', ['-p', '--model', model, '--output-format', 'json', '--append-system-prompt-file', 'SOUL.md', schedule.prompt], {
           timeout: 5 * 60 * 1000,
           encoding: 'utf-8',
           cwd: process.cwd(),
