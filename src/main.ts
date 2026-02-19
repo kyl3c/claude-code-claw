@@ -1,5 +1,8 @@
+import path from 'path';
+import { writeFileSync } from 'fs';
 import { PubSub, type Message } from '@google-cloud/pubsub';
 import { ChatServiceClient } from '@google-apps/chat';
+import { GoogleAuth } from 'google-auth-library';
 import { execFileSync, spawn } from 'child_process';
 import { loadSessions, getSession, setSession, deleteSession } from './sessions.js';
 import { loadSchedules, handleScheduleCommand, startSchedulerLoop } from './scheduler.js';
@@ -23,6 +26,14 @@ interface ChatEvent {
     };
     text?: string;
     argumentText?: string;
+    attachment?: Array<{
+      name?: string;
+      contentName?: string;
+      contentType?: string;
+      attachmentDataRef?: {
+        resourceName?: string;
+      };
+    }>;
   };
   user?: {
     name?: string;
@@ -47,6 +58,36 @@ const CLAUDE_TIMEOUT_MS = Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 100
 
 const pubsub = new PubSub();
 const chatClient = new ChatServiceClient();
+const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/chat.bot'] });
+
+// --- Attachments ---
+
+async function downloadAttachment(resourceName: string, filename: string): Promise<string> {
+  const client = await auth.getClient();
+  const url = `https://chat.googleapis.com/v1/media/${resourceName}?alt=media`;
+  const res = await client.request<ArrayBuffer>({ url, responseType: 'arraybuffer' });
+  const savePath = path.resolve('data', 'workspace', `${Date.now()}-${filename}`);
+  writeFileSync(savePath, Buffer.from(res.data));
+  return savePath;
+}
+
+async function processAttachments(attachments: NonNullable<ChatEvent['message']>['attachment']): Promise<string> {
+  if (!attachments?.length) return '';
+  const lines: string[] = [];
+  for (const att of attachments) {
+    const resourceName = att.attachmentDataRef?.resourceName;
+    const filename = att.contentName || 'attachment';
+    if (!resourceName) continue;
+    try {
+      const filePath = await downloadAttachment(resourceName, filename);
+      lines.push(`The user attached ${filename} at ${filePath}. Use the Read tool to read this file, then respond to their message.`);
+      console.log(`[attachment] downloaded ${filename} -> ${filePath}`);
+    } catch (err) {
+      console.error(`[attachment] failed to download ${filename}:`, err);
+    }
+  }
+  return lines.join('\n');
+}
 
 // --- Utilities ---
 
@@ -220,24 +261,29 @@ async function handleEvent(event: ChatEvent): Promise<void> {
   const spaceName = event.space?.name;
   if (!spaceName) return;
 
-  const input = (event.message?.argumentText ?? event.message?.text ?? '').trim();
-  if (!input) return;
+  const textInput = (event.message?.argumentText ?? event.message?.text ?? '').trim();
+  const attachments = event.message?.attachment;
+  if (!textInput && !attachments?.length) return;
 
-  console.log(`[${spaceName}] ${event.message?.sender?.displayName}: ${input.slice(0, 100)}`);
+  console.log(`[${spaceName}] ${event.message?.sender?.displayName}: ${textInput.slice(0, 100)}${attachments?.length ? ` [+${attachments.length} attachment(s)]` : ''}`);
 
   try {
-    // Command routing
-    if (input === '/reset') {
+    // Command routing (text-only, skip if just attachments)
+    if (textInput === '/reset') {
       deleteSession(spaceName);
       await sendMessage(spaceName, 'Session reset. Next message starts a fresh conversation.');
       return;
     }
 
-    if (input === '/schedules' || input.startsWith('/schedule ') || input.startsWith('/unschedule ')) {
-      const result = handleScheduleCommand(input, spaceName);
+    if (textInput === '/schedules' || textInput.startsWith('/schedule ') || textInput.startsWith('/unschedule ')) {
+      const result = handleScheduleCommand(textInput, spaceName);
       await sendMessage(spaceName, result);
       return;
     }
+
+    // Process attachments and build final input
+    const attachmentPrefix = await processAttachments(attachments);
+    const input = [attachmentPrefix, textInput].filter(Boolean).join('\n\n');
 
     // Claude bridge
     if (STREAM) {
