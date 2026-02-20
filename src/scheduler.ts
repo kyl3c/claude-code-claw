@@ -14,23 +14,26 @@ interface Schedule {
   nextRun: string;
 }
 
-let schedules: Schedule[] = [];
-let nextId = 1;
-
-export function loadSchedules(): void {
-  if (existsSync(SCHEDULES_PATH)) {
-    schedules = JSON.parse(readFileSync(SCHEDULES_PATH, 'utf-8'));
-    nextId = schedules.reduce((max, s) => Math.max(max, s.id + 1), 1);
-    console.log(`Loaded ${schedules.length} schedule(s)`);
-  } else {
-    mkdirSync(dirname(SCHEDULES_PATH), { recursive: true });
-    persist();
-    console.log('Created empty schedules file');
+function readSchedules(): Schedule[] {
+  try {
+    return JSON.parse(readFileSync(SCHEDULES_PATH, 'utf-8'));
+  } catch {
+    return [];
   }
 }
 
-function persist(): void {
+function writeSchedules(schedules: Schedule[]): void {
   writeFileSync(SCHEDULES_PATH, JSON.stringify(schedules, null, 2));
+}
+
+export function loadSchedules(): void {
+  if (!existsSync(SCHEDULES_PATH)) {
+    mkdirSync(dirname(SCHEDULES_PATH), { recursive: true });
+    writeSchedules([]);
+    console.log('Created empty schedules file');
+  } else {
+    console.log('Schedules file found, will load on first tick');
+  }
 }
 
 function computeNextRun(cron: string): string {
@@ -42,14 +45,15 @@ export function handleScheduleCommand(
   command: string,
   spaceName: string
 ): string {
+  const schedules = readSchedules();
   const trimmed = command.trim();
 
   if (trimmed === '/schedules') {
-    if (schedules.filter((s) => s.spaceName === spaceName && s.enabled).length === 0) {
+    const active = schedules.filter((s) => s.spaceName === spaceName && s.enabled);
+    if (active.length === 0) {
       return 'No active schedules for this space.';
     }
-    return schedules
-      .filter((s) => s.spaceName === spaceName && s.enabled)
+    return active
       .map((s) => `*#${s.id}* — \`${s.cron}\` — ${s.prompt}\n  Next: ${s.nextRun}`)
       .join('\n\n');
   }
@@ -60,7 +64,7 @@ export function handleScheduleCommand(
     const idx = schedules.findIndex((s) => s.id === id && s.spaceName === spaceName);
     if (idx === -1) return `Schedule #${id} not found in this space.`;
     schedules.splice(idx, 1);
-    persist();
+    writeSchedules(schedules);
     return `Schedule #${id} deleted.`;
   }
 
@@ -70,8 +74,9 @@ export function handleScheduleCommand(
     const prompt = scheduleMatch[2];
     try {
       const nr = computeNextRun(cron);
+      const nextId = schedules.reduce((max, s) => Math.max(max, s.id + 1), 1);
       const schedule: Schedule = {
-        id: nextId++,
+        id: nextId,
         cron,
         prompt,
         spaceName,
@@ -79,7 +84,7 @@ export function handleScheduleCommand(
         nextRun: nr,
       };
       schedules.push(schedule);
-      persist();
+      writeSchedules(schedules);
       return `Schedule #${schedule.id} created.\nCron: \`${cron}\`\nPrompt: ${prompt}\nNext run: ${nr}`;
     } catch (err) {
       return `Invalid cron expression: \`${cron}\``;
@@ -95,7 +100,15 @@ export function startSchedulerLoop(
   timeoutMs: number = 10 * 60 * 1000,
 ): void {
   async function tick() {
+    const schedules = readSchedules();
+    if (schedules.length === 0) {
+      setTimeout(tick, 60_000);
+      return;
+    }
+
+    let dirty = false;
     const now = new Date();
+
     for (const schedule of schedules) {
       if (!schedule.enabled) continue;
       if (new Date(schedule.nextRun) > now) continue;
@@ -118,15 +131,20 @@ export function startSchedulerLoop(
 
       try {
         schedule.nextRun = computeNextRun(schedule.cron);
-        persist();
+        dirty = true;
       } catch {
         schedule.enabled = false;
-        persist();
+        dirty = true;
       }
     }
+
+    if (dirty) {
+      writeSchedules(schedules);
+    }
+
     setTimeout(tick, 60_000);
   }
 
   setTimeout(tick, 60_000);
-  console.log('Scheduler started (60s poll)');
+  console.log('Scheduler started (60s poll, hot-reload enabled)');
 }
