@@ -11,7 +11,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 ## Features
 
 - **Persistent sessions** — each Chat space maintains its own conversation history with Claude
-- **Streaming responses** — messages update progressively as Claude generates them (optional)
+- **Emoji reactions** — 👀 when processing, ✅ when done, ❌ on error
 - **Scheduled prompts** — set up cron-based recurring prompts (e.g., daily briefings)
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
 - **Personality via SOUL.md** — customize the bot's behavior and tone through a simple markdown file
@@ -113,8 +113,6 @@ You should see `Listening on projects/YOUR_PROJECT_ID/subscriptions/chat-bot-sub
 |---|---|---|
 | `GOOGLE_CHAT_SUBSCRIPTION` | Full Pub/Sub subscription resource name (e.g., `projects/my-project/subscriptions/chat-bot-sub`) | Yes |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key JSON file | Yes |
-| `STREAM_RESPONSES` | Set to `true` to progressively update messages as Claude generates them | No |
-
 ## Commands
 
 | Command | Description |

@@ -85,9 +85,7 @@ Fill in `.env` with the values from the previous steps:
 - `GOOGLE_CHAT_SUBSCRIPTION` = the full subscription resource name from Step 3
 - `GOOGLE_APPLICATION_CREDENTIALS` = path to the `service-account-key.json` from Step 4
 
-Ask me whether I want to enable streaming responses (`STREAM_RESPONSES=true`) — explain that it progressively updates messages in Chat as Claude generates them, rather than waiting for the full response.
-
-Then explain that `CLAUDE.md` contains project-level instructions for Claude and `SOUL.md` defines the bot's personality and tone. Ask if I want to customize either one now or keep the defaults.
+Explain that `CLAUDE.md` contains project-level instructions for Claude and `SOUL.md` defines the bot's personality and tone. Ask if I want to customize either one now or keep the defaults.
 
 ## Step 7: Configure MCP Servers
 

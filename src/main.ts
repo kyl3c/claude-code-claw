@@ -1,9 +1,9 @@
 import path from "path";
-import { writeFileSync } from "fs";
+import { readFileSync, writeFileSync } from "fs";
 import { PubSub, type Message } from "@google-cloud/pubsub";
 import { ChatServiceClient } from "@google-apps/chat";
 import { GoogleAuth } from "google-auth-library";
-import { execFileSync, spawn } from "child_process";
+import { execFileSync } from "child_process";
 import {
   loadSessions,
   getSession,
@@ -59,7 +59,6 @@ if (!SUBSCRIPTION) {
 }
 
 const MAX_MESSAGE_LENGTH = 4096;
-const STREAM = process.env.STREAM_RESPONSES === "true";
 const MODEL = process.env.ANTHROPIC_MODEL || "sonnet";
 const CLAUDE_TIMEOUT_MS =
   Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 1000;
@@ -71,6 +70,24 @@ const chatClient = new ChatServiceClient();
 const auth = new GoogleAuth({
   scopes: ["https://www.googleapis.com/auth/chat.bot"],
 });
+
+// DWD client for reactions (impersonates a real user)
+const REACTION_USER_EMAIL = process.env.REACTION_USER_EMAIL;
+let reactionsClient: ChatServiceClient | undefined;
+if (REACTION_USER_EMAIL) {
+  const credentials = JSON.parse(
+    readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS!, "utf-8"),
+  );
+  const reactionsAuth = new GoogleAuth({
+    credentials,
+    scopes: [
+      "https://www.googleapis.com/auth/chat.messages.reactions.create",
+    ],
+    clientOptions: { subject: REACTION_USER_EMAIL },
+  });
+  reactionsClient = new ChatServiceClient({ authClient: await reactionsAuth.getClient() as any });
+  console.log(`Reactions client ready (impersonating ${REACTION_USER_EMAIL})`);
+}
 
 // --- Attachments ---
 
@@ -114,6 +131,23 @@ async function processAttachments(
     }
   }
   return lines.join("\n");
+}
+
+// --- Reactions ---
+
+async function reactToMessage(
+  messageName: string,
+  emoji: string,
+): Promise<void> {
+  if (!reactionsClient) return;
+  try {
+    await reactionsClient.createReaction({
+      parent: messageName,
+      reaction: { emoji: { unicode: emoji } },
+    });
+  } catch (err) {
+    console.error(`Failed to react with ${emoji} on ${messageName}:`, err);
+  }
 }
 
 // --- Utilities ---
@@ -198,121 +232,6 @@ function callClaude(input: string, spaceName: string): string {
   return parsed.result || output;
 }
 
-class StaleSessionError extends Error {
-  constructor(code: number | null) {
-    super(`Claude process exited with code ${code} and no output`);
-  }
-}
-
-interface StreamResult {
-  text: string;
-  sessionId?: string;
-}
-
-async function callClaudeStreaming(
-  input: string,
-  spaceName: string,
-  onUpdate: (text: string) => void,
-): Promise<StreamResult> {
-  const sessionId = getSession(spaceName);
-  const args = [
-    "-p",
-    "--model",
-    MODEL,
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--append-system-prompt-file",
-    SOUL_PATH,
-    "--chrome",
-  ];
-  if (sessionId) {
-    args.push("--resume", sessionId);
-  }
-  args.push(input);
-
-  return new Promise<StreamResult>((resolve, reject) => {
-    const proc = spawn("claude", args, { cwd: process.cwd() });
-    proc.stdin.end();
-
-    let accumulated = "";
-    let resultSessionId: string | undefined;
-    let resultText: string | undefined;
-    let buffer = "";
-
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(
-        new Error(
-          `Claude streaming timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`,
-        ),
-      );
-    }, CLAUDE_TIMEOUT_MS);
-
-    function processLine(line: string) {
-      if (!line.trim()) return;
-      try {
-        const msg = JSON.parse(line);
-        if (
-          msg.type === "stream_event" &&
-          msg.event?.type === "content_block_start" &&
-          msg.event.content_block?.type === "tool_use"
-        ) {
-          const tool = msg.event.content_block;
-          console.log(`[claude] tool: ${tool.name}`);
-          accumulated = "";
-        } else if (
-          msg.type === "stream_event" &&
-          msg.event?.type === "content_block_delta" &&
-          msg.event.delta?.type === "text_delta"
-        ) {
-          accumulated += msg.event.delta.text;
-          onUpdate(accumulated);
-        } else if (msg.type === "result") {
-          resultText = msg.result;
-          resultSessionId = msg.session_id;
-        }
-      } catch {
-        // skip unparseable lines
-      }
-    }
-
-    proc.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      const lines = buffer.split("\n");
-      buffer = lines.pop()!; // keep incomplete last line
-      for (const line of lines) processLine(line);
-    });
-
-    proc.stderr.on("data", (chunk: Buffer) => {
-      console.error(`[claude stderr] ${chunk.toString()}`);
-    });
-
-    proc.on("close", (code) => {
-      clearTimeout(timeout);
-      // drain any remaining buffer
-      if (buffer.trim()) processLine(buffer);
-
-      console.log(
-        `[streaming] process exited code=${code} resultText=${resultText !== undefined} accumulated=${accumulated.length} chars`,
-      );
-      if (resultText !== undefined) {
-        resolve({ text: resultText, sessionId: resultSessionId });
-      } else if (accumulated) {
-        resolve({ text: accumulated, sessionId: resultSessionId });
-      } else {
-        reject(new StaleSessionError(code));
-      }
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
-}
-
 // --- Message handler ---
 
 async function handleEvent(event: ChatEvent): Promise<void> {
@@ -337,6 +256,11 @@ async function handleEvent(event: ChatEvent): Promise<void> {
     `[${spaceName}] ${event.message?.sender?.displayName}: ${textInput.slice(0, 100)}${attachments?.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
   );
 
+  const messageName = event.message?.name;
+
+  // React 👀 before processing (must await since callClaude blocks the event loop)
+  if (messageName) await reactToMessage(messageName, "👀");
+
   try {
     // Command routing (text-only, skip if just attachments)
     if (textInput === "/reset") {
@@ -345,103 +269,29 @@ async function handleEvent(event: ChatEvent): Promise<void> {
         spaceName,
         "Session reset. Next message starts a fresh conversation.",
       );
-      return;
-    }
-
-    if (
+    } else if (
       textInput === "/schedules" ||
       textInput.startsWith("/schedule ") ||
       textInput.startsWith("/unschedule ")
     ) {
       const result = handleScheduleCommand(textInput, spaceName);
       await sendMessage(spaceName, result);
-      return;
-    }
-
-    // Process attachments and build final input
-    const attachmentPrefix = await processAttachments(attachments);
-    const input = [attachmentPrefix, textInput].filter(Boolean).join("\n\n");
-
-    // Claude bridge
-    if (STREAM) {
-      // Create placeholder message
-      const [placeholder] = await chatClient.createMessage({
-        parent: spaceName,
-        message: { text: "⏳" },
-      });
-      const messageName = placeholder.name;
-      console.log(`[streaming] placeholder created: ${messageName}`);
-
-      let lastUpdate = 0;
-      const UPDATE_INTERVAL = 1500;
-
-      const onUpdate = (partial: string) => {
-        const now = Date.now();
-        if (now - lastUpdate < UPDATE_INTERVAL) return;
-        lastUpdate = now;
-        if (!messageName) return;
-
-        let displayText = partial;
-        if (displayText.length > MAX_MESSAGE_LENGTH) {
-          displayText = "..." + displayText.slice(-(MAX_MESSAGE_LENGTH - 3));
-        }
-
-        console.log(
-          `[streaming] updating message (${displayText.length} chars)`,
-        );
-        chatClient
-          .updateMessage({
-            message: { name: messageName, text: displayText },
-            updateMask: { paths: ["text"] },
-          })
-          .catch((err: any) => console.error("Failed to update message:", err));
-      };
-
-      let result: StreamResult;
-      try {
-        result = await callClaudeStreaming(input, spaceName, onUpdate);
-      } catch (err) {
-        if (err instanceof StaleSessionError && getSession(spaceName)) {
-          console.log(
-            `[${spaceName}] session is stale, retrying without resume`,
-          );
-          deleteSession(spaceName);
-          result = await callClaudeStreaming(input, spaceName, onUpdate);
-        } else {
-          throw err;
-        }
-      }
-
-      const { text, sessionId } = result;
-
-      console.log(
-        `[streaming] done: ${text.length} chars, sessionId=${sessionId}`,
-      );
-
-      if (sessionId) {
-        setSession(spaceName, sessionId);
-      }
-
-      // Final update: first chunk replaces placeholder, rest are new messages
-      const chunks = splitMessage(text, MAX_MESSAGE_LENGTH);
-      if (messageName && chunks.length > 0) {
-        await chatClient.updateMessage({
-          message: { name: messageName, text: chunks[0] },
-          updateMask: { paths: ["text"] },
-        });
-        for (let i = 1; i < chunks.length; i++) {
-          await chatClient.createMessage({
-            parent: spaceName,
-            message: { text: chunks[i] },
-          });
-        }
-      }
     } else {
+      // Process attachments and build final input
+      const attachmentPrefix = await processAttachments(attachments);
+      const input = [attachmentPrefix, textInput].filter(Boolean).join("\n\n");
+
+      // Claude bridge
       const response = callClaude(input, spaceName);
       await sendMessage(spaceName, response);
     }
+
+    // React ✅ on success
+    if (messageName) await reactToMessage(messageName, "✅");
   } catch (err: any) {
     console.error(`Error handling message:`, err);
+    // React ❌ on error
+    if (messageName) await reactToMessage(messageName, "❌");
     await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(
       () => {},
     );
