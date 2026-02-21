@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+# Runtime data including data/telos/ (personal TELOS context)
 data/
 .playwright-mcp/
 .claude/settings.json

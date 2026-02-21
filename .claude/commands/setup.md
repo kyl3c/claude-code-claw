@@ -80,13 +80,19 @@ cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 cp tool-emoji.example.json tool-emoji.json
 mkdir -p data/workspace
+mkdir -p data/telos && cp telos/*.md data/telos/
 ```
 
 Fill in `.env` with the values from the previous steps:
 - `GOOGLE_CHAT_SUBSCRIPTION` = the full subscription resource name from Step 3
 - `GOOGLE_APPLICATION_CREDENTIALS` = path to the `service-account-key.json` from Step 4
 
-Explain that `CLAUDE.md` contains project-level instructions for Claude and `SOUL.md` defines the bot's personality and tone. Ask if I want to customize either one now or keep the defaults.
+Explain that:
+- `CLAUDE.md` contains project-level instructions for Claude
+- `SOUL.md` defines the bot's personality and tone
+- `data/telos/` contains TELOS personal context files — these give the AI persistent context about who you are (mission, goals, beliefs, challenges, etc.) so every response is aligned with your life. The template files have placeholder content you can replace with your own.
+
+Ask if I want to customize these files now or keep the defaults. Suggest starting with `data/telos/MISSION.md` and `data/telos/GOALS.md` — these have the highest impact on response quality.
 
 ## Step 7: Configure MCP Servers
 

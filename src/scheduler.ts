@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
 import { execFileSync } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
+import { loadTelosContext } from './telos.js';
 
 const SCHEDULES_PATH = 'data/schedules.json';
 
@@ -115,7 +116,9 @@ export function startSchedulerLoop(
 
       console.log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
       try {
-        const output = execFileSync('claude', ['-p', '--model', model, '--output-format', 'json', '--append-system-prompt-file', 'SOUL.md', schedule.prompt], {
+        const telosContext = loadTelosContext();
+        const promptWithContext = [telosContext, schedule.prompt].filter(Boolean).join('\n\n');
+        const output = execFileSync('claude', ['-p', '--model', model, '--output-format', 'json', '--append-system-prompt-file', 'SOUL.md', promptWithContext], {
           timeout: timeoutMs,
           encoding: 'utf-8',
           cwd: process.cwd(),

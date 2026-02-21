@@ -15,6 +15,7 @@ import {
   handleScheduleCommand,
   startSchedulerLoop,
 } from "./scheduler.js";
+import { loadTelosContext, getTelosSummary, getTelosFile } from "./telos.js";
 
 
 // --- Types ---
@@ -335,10 +336,21 @@ async function handleEvent(event: ChatEvent): Promise<void> {
     ) {
       const result = handleScheduleCommand(textInput, spaceName);
       await sendMessage(spaceName, result);
+    } else if (textInput === "/telos") {
+      await sendMessage(spaceName, getTelosSummary());
+    } else if (textInput.startsWith("/telos ")) {
+      const fileName = textInput.slice("/telos ".length).trim();
+      const content = getTelosFile(fileName);
+      if (content) {
+        await sendMessage(spaceName, content);
+      } else {
+        await sendMessage(spaceName, `TELOS file \`${fileName}\` not found. Use \`/telos\` to list available files.`);
+      }
     } else {
       // Process attachments and build final input
       const attachmentPrefix = await processAttachments(attachments);
-      const input = [attachmentPrefix, textInput].filter(Boolean).join("\n\n");
+      const telosContext = loadTelosContext();
+      const input = [telosContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
 
       // Claude bridge
       const reactedEmojis = new Set<string>();

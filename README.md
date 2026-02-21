@@ -15,6 +15,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 - **Scheduled prompts** — set up cron-based recurring prompts (e.g., daily briefings)
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
 - **Personality via SOUL.md** — customize the bot's behavior and tone through a simple markdown file
+- **TELOS personal context** — give the AI persistent context about who you are (mission, goals, beliefs, challenges) so every response is aligned with your life
 
 ## How It Works
 
@@ -95,9 +96,10 @@ cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 cp tool-emoji.example.json tool-emoji.json
+mkdir -p data/telos && cp telos/*.md data/telos/
 ```
 
-Edit `.env` with your values (see [Configuration](#configuration) below). Edit `CLAUDE.md` and `SOUL.md` to customize the bot's instructions and personality.
+Edit `.env` with your values (see [Configuration](#configuration) below). Edit `CLAUDE.md` and `SOUL.md` to customize the bot's instructions and personality. Edit files in `data/telos/` to provide personal context (see [TELOS](#telos-personal-context)).
 
 ### 6. Install and Run
 
@@ -122,6 +124,8 @@ You should see `Listening on projects/YOUR_PROJECT_ID/subscriptions/chat-bot-sub
 | `/schedule "<cron>" <prompt>` | Schedule a recurring prompt (e.g., `/schedule "0 9 * * *" morning briefing`) |
 | `/schedules` | List active schedules in the current space |
 | `/unschedule <id>` | Delete a schedule by ID |
+| `/telos` | List loaded TELOS context files and their sizes |
+| `/telos <file>` | Show contents of a specific TELOS file (e.g., `/telos goals`) |
 
 ## Project Structure
 
@@ -130,7 +134,10 @@ src/
   main.ts        # Pub/Sub listener, message routing, Claude bridge
   sessions.ts    # Per-space session persistence
   scheduler.ts   # Cron-based scheduled prompts
+  telos.ts       # TELOS context loading module
+telos/           # TELOS template files (checked into repo)
 data/            # Runtime data (gitignored)
+  telos/         # Your personal TELOS files (gitignored)
 .claude/
   commands/
     setup.md     # Interactive setup guide (run with `claude /setup`)
@@ -141,6 +148,12 @@ data/            # Runtime data (gitignored)
 - **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds. (Copied from `SOUL.example.md` during setup, gitignored so your edits stay local.)
 - **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here. (Copied from `CLAUDE.example.md` during setup, gitignored so your edits stay local.)
 - **`tool-emoji.json`** — maps tool names to emoji reactions shown during processing. The bot reacts with the corresponding emoji when Claude uses a tool (e.g. 📖 for Read, 🔍 for Grep). Add your own MCP tool mappings here, e.g. `"mcp__whoop__get_recent_workouts": "🏋️"`. (Copied from `tool-emoji.example.json` during setup, gitignored so your edits stay local.)
+
+### TELOS Personal Context
+
+TELOS gives the AI persistent context about who you are — mission, goals, beliefs, challenges, and more — so every response is aligned with your actual life. Inspired by Daniel Miessler's [PAI (Personal AI Infrastructure)](https://danielmiessler.com/) approach.
+
+The `telos/` directory contains template files. During setup, these are copied to `data/telos/` where you customize them with your own content. The bot loads all `.md` files from `data/telos/` on every prompt. See [`telos/README.md`](telos/README.md) for details on each file.
 
 ## Adding MCP Servers
 
