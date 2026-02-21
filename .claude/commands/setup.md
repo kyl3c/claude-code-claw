@@ -78,6 +78,7 @@ Ask me to confirm when this is done before continuing.
 cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
+cp tool-emoji.example.json tool-emoji.json
 mkdir -p data/workspace
 ```
 

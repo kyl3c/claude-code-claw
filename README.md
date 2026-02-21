@@ -94,6 +94,7 @@ gcloud iam service-accounts keys create service-account-key.json \
 cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
+cp tool-emoji.example.json tool-emoji.json
 ```
 
 Edit `.env` with your values (see [Configuration](#configuration) below). Edit `CLAUDE.md` and `SOUL.md` to customize the bot's instructions and personality.
@@ -139,6 +140,7 @@ data/            # Runtime data (gitignored)
 
 - **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds. (Copied from `SOUL.example.md` during setup, gitignored so your edits stay local.)
 - **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here. (Copied from `CLAUDE.example.md` during setup, gitignored so your edits stay local.)
+- **`tool-emoji.json`** — maps tool names to emoji reactions shown during processing. The bot reacts with the corresponding emoji when Claude uses a tool (e.g. 📖 for Read, 🔍 for Grep). Add your own MCP tool mappings here, e.g. `"mcp__whoop__get_recent_workouts": "🏋️"`. (Copied from `tool-emoji.example.json` during setup, gitignored so your edits stay local.)
 
 ## Adding MCP Servers
 

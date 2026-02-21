@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "fs";
 import { PubSub, type Message } from "@google-cloud/pubsub";
 import { ChatServiceClient } from "@google-apps/chat";
 import { GoogleAuth } from "google-auth-library";
-import { execFileSync } from "child_process";
+import { spawn } from "child_process";
 import {
   loadSessions,
   getSession,
@@ -87,6 +87,16 @@ if (REACTION_USER_EMAIL) {
   });
   reactionsClient = new ChatServiceClient({ authClient: await reactionsAuth.getClient() as any });
   console.log(`Reactions client ready (impersonating ${REACTION_USER_EMAIL})`);
+}
+
+// --- Tool emoji map ---
+
+let toolEmoji: Record<string, string> = {};
+try {
+  toolEmoji = JSON.parse(readFileSync("tool-emoji.json", "utf-8"));
+  console.log(`Loaded ${Object.keys(toolEmoji).length} tool emoji mapping(s)`);
+} catch {
+  // No custom map — tool reactions disabled
 }
 
 // --- Attachments ---
@@ -188,14 +198,19 @@ async function sendMessage(spaceName: string, text: string): Promise<void> {
 
 const SOUL_PATH = "SOUL.md";
 
-function callClaude(input: string, spaceName: string): string {
+async function callClaude(
+  input: string,
+  spaceName: string,
+  onToolCall?: (toolName: string) => void,
+): Promise<string> {
   const sessionId = getSession(spaceName);
   const args = [
     "-p",
     "--model",
     MODEL,
     "--output-format",
-    "json",
+    "stream-json",
+    "--verbose",
     "--append-system-prompt-file",
     SOUL_PATH,
     "--chrome",
@@ -205,31 +220,74 @@ function callClaude(input: string, spaceName: string): string {
   }
   args.push(input);
 
-  let output: string;
-  try {
-    output = execFileSync("claude", args, {
-      timeout: CLAUDE_TIMEOUT_MS,
-      encoding: "utf-8",
-      cwd: process.cwd(),
-    });
-  } catch (err) {
-    if (sessionId) {
-      console.log(
-        `[${spaceName}] session ${sessionId} is stale, retrying without resume`,
-      );
-      deleteSession(spaceName);
-      return callClaude(input, spaceName);
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn("claude", args, { cwd: process.cwd() });
+    proc.stdin.end();
+
+    let resultText: string | undefined;
+    let resultSessionId: string | undefined;
+    let buffer = "";
+
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`Claude timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
+    }, CLAUDE_TIMEOUT_MS);
+
+    function processLine(line: string) {
+      if (!line.trim()) return;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+          for (const block of msg.message.content) {
+            if (block.type === "tool_use" && block.name) {
+              console.log(`[claude] tool: ${block.name}`);
+              onToolCall?.(block.name);
+            }
+          }
+        } else if (msg.type === "result") {
+          resultText = msg.result;
+          resultSessionId = msg.session_id;
+        }
+      } catch {
+        // skip unparseable lines
+      }
     }
-    throw err;
-  }
 
-  const parsed = JSON.parse(output);
+    proc.stdout.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!;
+      for (const line of lines) processLine(line);
+    });
 
-  if (parsed.session_id) {
-    setSession(spaceName, parsed.session_id);
-  }
+    proc.stderr.on("data", (chunk: Buffer) => {
+      console.error(`[claude stderr] ${chunk.toString()}`);
+    });
 
-  return parsed.result || output;
+    proc.on("close", (code) => {
+      clearTimeout(timeout);
+      if (buffer.trim()) processLine(buffer);
+
+      if (resultText !== undefined) {
+        if (resultSessionId) setSession(spaceName, resultSessionId);
+        resolve(resultText);
+      } else if (sessionId) {
+        // Stale session — retry without resume
+        console.log(
+          `[${spaceName}] session ${sessionId} is stale, retrying without resume`,
+        );
+        deleteSession(spaceName);
+        callClaude(input, spaceName, onToolCall).then(resolve, reject);
+      } else {
+        reject(new Error(`Claude exited with code ${code} and no output`));
+      }
+    });
+
+    proc.on("error", (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
 }
 
 // --- Message handler ---
@@ -282,7 +340,14 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       const input = [attachmentPrefix, textInput].filter(Boolean).join("\n\n");
 
       // Claude bridge
-      const response = callClaude(input, spaceName);
+      const reactedEmojis = new Set<string>();
+      const response = await callClaude(input, spaceName, (toolName) => {
+        const emoji = toolEmoji[toolName];
+        if (emoji && messageName && !reactedEmojis.has(emoji)) {
+          reactedEmojis.add(emoji);
+          reactToMessage(messageName, emoji);
+        }
+      });
       await sendMessage(spaceName, response);
     }
 
