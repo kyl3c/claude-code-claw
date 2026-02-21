@@ -72,13 +72,47 @@ This step can't be automated. Walk me through it:
 
 Ask me to confirm when this is done before continuing.
 
-## Step 6: Configure Environment and Personality
+## Step 6: Emoji Reactions (Optional)
+
+Ask: "Do you want the bot to add emoji reactions to messages as it processes them? (e.g. 🔍 when searching, 📖 when reading files). This is cosmetic — everything works fine without it, but it gives nice visual feedback."
+
+**If yes:**
+
+Explain that this requires **Domain-Wide Delegation (DWD)** because the Google Chat API only allows *users* (not bots) to create reactions. The service account will impersonate a real Workspace user.
+
+Walk through these steps:
+
+1. First, get the service account's **Client ID** (not the email):
+   ```bash
+   gcloud iam service-accounts describe chat-bot@<PROJECT_ID>.iam.gserviceaccount.com --format="value(uniqueId)"
+   ```
+   Note this number — we'll need it next.
+
+2. Go to [Google Admin Console → Security → API Controls → Domain-wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation)
+3. Click **Add new** and enter:
+   - **Client ID**: the number from step 1
+   - **OAuth scopes**: `https://www.googleapis.com/auth/chat.messages.reactions.create`
+4. Click **Authorize**
+
+Ask the user to confirm when this is done. Then ask for their Workspace email address — this is the user the service account will impersonate for reactions. Save it for the `.env` step.
+
+Also copy the emoji map:
+```bash
+cp tool-emoji.example.json tool-emoji.json
+```
+
+Explain they can customize `tool-emoji.json` to map tool names to emoji, including MCP tools (e.g. `"mcp__whoop__get_recent_workouts": "🏋️"`).
+
+**If no:**
+
+Skip this step entirely. Do NOT copy `tool-emoji.example.json`. No DWD setup needed. Note that we'll leave `REACTION_USER_EMAIL` unset in `.env`.
+
+## Step 7: Configure Environment and Personality
 
 ```bash
 cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
-cp tool-emoji.example.json tool-emoji.json
 mkdir -p data/workspace
 mkdir -p data/telos && cp telos/*.md data/telos/
 ```
@@ -86,6 +120,7 @@ mkdir -p data/telos && cp telos/*.md data/telos/
 Fill in `.env` with the values from the previous steps:
 - `GOOGLE_CHAT_SUBSCRIPTION` = the full subscription resource name from Step 3
 - `GOOGLE_APPLICATION_CREDENTIALS` = path to the `service-account-key.json` from Step 4
+- `REACTION_USER_EMAIL` = the email from Step 6 (only if they chose emoji reactions; otherwise leave it commented out)
 
 Explain that:
 - `CLAUDE.md` contains project-level instructions for Claude
@@ -94,7 +129,7 @@ Explain that:
 
 Ask if I want to customize these files now or keep the defaults. Suggest starting with `data/telos/MISSION.md` and `data/telos/GOALS.md` — these have the highest impact on response quality.
 
-## Step 7: Configure MCP Servers
+## Step 8: Configure MCP Servers
 
 MCP (Model Context Protocol) servers give the bot access to external tools and services. The config file `.mcp.json` is gitignored since it contains local paths.
 
@@ -114,7 +149,7 @@ For each server they want to add, collect the command and args, then write the e
 
 If they don't want to add any, that's fine — leave the example server or clear it to an empty `"mcpServers": {}`.
 
-## Step 8: Configure Tool Permissions
+## Step 9: Configure Tool Permissions
 
 Now let's set up `.claude/settings.json` so the bot has the right tool permissions. This file is gitignored since it contains machine-specific settings.
 
@@ -178,7 +213,7 @@ For MCP servers where the user chose "allow all tools", add a note that they sho
 
 Write the file and confirm it looks correct before continuing.
 
-## Step 9: Install and Run
+## Step 10: Install and Run
 
 ```bash
 npm install
@@ -187,7 +222,7 @@ npm start
 
 Verify that the console shows "Listening on ..." without any errors. If there are errors, help me troubleshoot.
 
-## Step 10: Test
+## Step 11: Test
 
 1. In Google Chat, search for the bot by the app name from Step 5
 2. Add it to a space or start a DM with it

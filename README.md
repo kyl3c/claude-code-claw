@@ -11,7 +11,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 ## Features
 
 - **Persistent sessions** — each Chat space maintains its own conversation history with Claude
-- **Emoji reactions** — 👀 when processing, ✅ when done, ❌ on error
+- **Emoji reactions** *(optional)* — reacts with tool-specific emoji as Claude works (requires Domain-Wide Delegation)
 - **Scheduled prompts** — set up cron-based recurring prompts (e.g., daily briefings)
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
 - **Personality via SOUL.md** — customize the bot's behavior and tone through a simple markdown file
@@ -116,6 +116,20 @@ You should see `Listening on projects/YOUR_PROJECT_ID/subscriptions/chat-bot-sub
 |---|---|---|
 | `GOOGLE_CHAT_SUBSCRIPTION` | Full Pub/Sub subscription resource name (e.g., `projects/my-project/subscriptions/chat-bot-sub`) | Yes |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key JSON file | Yes |
+| `REACTION_USER_EMAIL` | Email of a Workspace user for emoji reactions (requires Domain-Wide Delegation — see below) | No |
+
+### Emoji Reactions (Optional)
+
+The bot can add emoji reactions to messages as it works (e.g. 🔍 when searching, 📖 when reading files). This requires **Domain-Wide Delegation (DWD)** because the Google Chat API only allows *users* (not bots) to create reactions. The service account impersonates a real Workspace user to add them.
+
+**To enable emoji reactions:**
+
+1. **Enable DWD on the service account** — Go to [Google Admin Console → Security → API Controls → Domain-wide Delegation](https://admin.google.com/ac/owl/domainwidedelegation) and add the service account's **Client ID** with the scope: `https://www.googleapis.com/auth/chat.messages.reactions.create`
+2. **Set `REACTION_USER_EMAIL`** in `.env` to a real Workspace user email (e.g. your own)
+3. **Customize mappings** in `tool-emoji.json` — maps tool names to emoji (e.g. `"Read": "📖"`, `"mcp__whoop__get_recent_workouts": "🏋️"`)
+
+If `REACTION_USER_EMAIL` is not set, reactions are silently disabled — everything else works normally.
+
 ## Commands
 
 | Command | Description |
