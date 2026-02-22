@@ -16,6 +16,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
 - **Personality via SOUL.md** — customize the bot's behavior and tone through a simple markdown file
 - **TELOS personal context** — give the AI persistent context about who you are (mission, goals, beliefs, challenges) so every response is aligned with your life
+- **Heartbeat checks** *(optional)* — periodic context-aware checks against a user-maintained checklist (emails, calendar, tasks). Silent when nothing needs attention (`HEARTBEAT_OK` is suppressed), alerts only when something requires action
 
 ## How It Works
 
@@ -97,6 +98,7 @@ cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 cp tool-emoji.example.json tool-emoji.json
 mkdir -p data/telos && cp telos/*.md data/telos/
+cp heartbeat.example.md data/heartbeat.md
 ```
 
 Edit `.env` with your values (see [Configuration](#configuration) below). Edit `CLAUDE.md` and `SOUL.md` to customize the bot's instructions and personality. Edit files in `data/telos/` to provide personal context (see [TELOS](#telos-personal-context)).
@@ -140,6 +142,7 @@ If `REACTION_USER_EMAIL` is not set, reactions are silently disabled — everyth
 | `/unschedule <id>` | Delete a schedule by ID |
 | `/telos` | List loaded TELOS context files and their sizes |
 | `/telos <file>` | Show contents of a specific TELOS file (e.g., `/telos goals`) |
+| `/heartbeat` | Show heartbeat status (interval, active hours, checklist state) |
 
 ## Project Structure
 
@@ -149,6 +152,7 @@ src/
   sessions.ts    # Per-space session persistence
   scheduler.ts   # Cron-based scheduled prompts
   telos.ts       # TELOS context loading module
+  heartbeat.ts   # Periodic heartbeat checks
 telos/           # TELOS template files (checked into repo)
 data/            # Runtime data (gitignored)
   telos/         # Your personal TELOS files (gitignored)
@@ -168,6 +172,29 @@ data/            # Runtime data (gitignored)
 TELOS gives the AI persistent context about who you are — mission, goals, beliefs, challenges, and more — so every response is aligned with your actual life. Inspired by Daniel Miessler's [PAI (Personal AI Infrastructure)](https://danielmiessler.com/) approach.
 
 The `telos/` directory contains template files. During setup, these are copied to `data/telos/` where you customize them with your own content. The bot loads all `.md` files from `data/telos/` on every prompt. See [`telos/README.md`](telos/README.md) for details on each file.
+
+### Heartbeat
+
+The heartbeat runs periodic checks against a user-maintained checklist — emails, calendar, tasks, etc. — in a single context-aware API call using `--resume`, so the agent has full conversation history. If nothing needs attention, the agent responds `HEARTBEAT_OK` and the message is silently suppressed (no spam). Only actual alerts are delivered to Google Chat.
+
+**Setup:**
+
+1. Copy the template: `cp heartbeat.example.md data/heartbeat.md`
+2. Edit `data/heartbeat.md` with your own checklist items
+3. Set `HEARTBEAT_SPACE` in `.env` to the space where alerts should be sent
+
+**Environment variables:**
+
+| Variable | Description | Default |
+|---|---|---|
+| `HEARTBEAT_SPACE` | Google Chat space for heartbeat alerts (omit to disable) | *(disabled)* |
+| `HEARTBEAT_INTERVAL_MINUTES` | Minutes between checks | `30` |
+| `HEARTBEAT_ACTIVE_HOURS` | Active window in `start-end` format (24h) | `7-23` |
+| `HEARTBEAT_TIMEZONE` | IANA timezone for active hours | `America/Denver` |
+
+**Transcript pruning:** When a heartbeat returns `HEARTBEAT_OK`, the heartbeat exchange is automatically pruned from the Claude CLI session transcript (JSONL file) to keep context clean. Only heartbeats that surfaced real alerts remain in history.
+
+**Concurrency:** The heartbeat uses a guarded `callClaude` wrapper — if a user message is already being processed, the heartbeat tick is skipped. Interactive messages are never blocked.
 
 ## Adding MCP Servers
 

@@ -16,6 +16,11 @@ import {
   startSchedulerLoop,
 } from "./scheduler.js";
 import { loadTelosContext, getTelosSummary, getTelosFile } from "./telos.js";
+import {
+  parseHeartbeatConfig,
+  startHeartbeatLoop,
+  getHeartbeatStatus,
+} from "./heartbeat.js";
 
 
 // --- Types ---
@@ -99,6 +104,28 @@ try {
   console.log(`Loaded ${Object.keys(toolEmoji).length} tool emoji mapping(s)`);
 } catch {
   // No custom map — tool reactions disabled
+}
+
+// --- Heartbeat config & concurrency guard ---
+
+const heartbeatConfig = parseHeartbeatConfig();
+
+let claudeInFlight: Set<string> | undefined;
+if (heartbeatConfig) {
+  claudeInFlight = new Set<string>();
+}
+
+async function callClaudeGuarded(
+  input: string,
+  spaceName: string,
+): Promise<string | null> {
+  if (claudeInFlight!.has(spaceName)) return null;
+  claudeInFlight!.add(spaceName);
+  try {
+    return await callClaude(input, spaceName);
+  } finally {
+    claudeInFlight!.delete(spaceName);
+  }
 }
 
 // --- Attachments ---
@@ -346,6 +373,8 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       } else {
         await sendMessage(spaceName, `TELOS file \`${fileName}\` not found. Use \`/telos\` to list available files.`);
       }
+    } else if (textInput === "/heartbeat" && heartbeatConfig) {
+      await sendMessage(spaceName, getHeartbeatStatus(heartbeatConfig));
     } else {
       // Process attachments and build final input
       const attachmentPrefix = await processAttachments(attachments);
@@ -399,6 +428,10 @@ async function main(): Promise<void> {
   });
 
   startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS);
+
+  if (heartbeatConfig) {
+    startHeartbeatLoop(heartbeatConfig, callClaudeGuarded, sendMessage);
+  }
 
   console.log(`Listening on ${SUBSCRIPTION}`);
 }

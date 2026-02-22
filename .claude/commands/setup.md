@@ -129,7 +129,37 @@ Explain that:
 
 Ask if I want to customize these files now or keep the defaults. Suggest starting with `data/telos/MISSION.md` and `data/telos/GOALS.md` — these have the highest impact on response quality.
 
-## Step 8: Configure MCP Servers
+## Step 8: Heartbeat (Optional)
+
+Ask: "Do you want to enable periodic heartbeat checks? The heartbeat runs on a timer (default every 30 minutes) and checks a user-maintained checklist — things like urgent emails, upcoming calendar events, overdue tasks. If nothing needs attention, the check is silently suppressed. You only get notified when something actually needs your attention."
+
+**If yes:**
+
+```bash
+cp heartbeat.example.md data/heartbeat.md
+```
+
+Ask for these settings (suggest defaults):
+- **Space ID**: Which Google Chat space should heartbeat alerts go to? (They'll need the space name, e.g. `spaces/AAAA...`. They can find this in the Chat URL or by sending a test message and checking the logs.)
+- **Interval**: How often to check, in minutes (default: 30)
+- **Active hours**: When to run checks, e.g. `7-23` for 7am–11pm (default: 7-23)
+- **Timezone**: IANA timezone like `America/Denver`, `America/New_York`, `Europe/London` (default: America/Denver)
+
+Add these to `.env`:
+```
+HEARTBEAT_SPACE=spaces/<SPACE_ID>
+HEARTBEAT_INTERVAL_MINUTES=30
+HEARTBEAT_ACTIVE_HOURS=7-23
+HEARTBEAT_TIMEZONE=<TIMEZONE>
+```
+
+Explain that they should edit `data/heartbeat.md` with their own checklist items. The bot will check each item and only alert when something genuinely needs attention. The checklist works best with items the bot can actually check via its available tools (e.g., MCP servers for Gmail, calendar, Asana).
+
+**If no:**
+
+Skip this step entirely. Leave `HEARTBEAT_SPACE` unset in `.env` — the heartbeat feature is completely disabled when this variable is absent.
+
+## Step 9: Configure MCP Servers (Optional)
 
 MCP (Model Context Protocol) servers give the bot access to external tools and services. The config file `.mcp.json` is gitignored since it contains local paths.
 
@@ -149,7 +179,7 @@ For each server they want to add, collect the command and args, then write the e
 
 If they don't want to add any, that's fine — leave the example server or clear it to an empty `"mcpServers": {}`.
 
-## Step 9: Configure Tool Permissions
+## Step 10: Configure Tool Permissions
 
 Now let's set up `.claude/settings.json` so the bot has the right tool permissions. This file is gitignored since it contains machine-specific settings.
 
@@ -213,7 +243,7 @@ For MCP servers where the user chose "allow all tools", add a note that they sho
 
 Write the file and confirm it looks correct before continuing.
 
-## Step 10: Install and Run
+## Step 11: Install and Run
 
 ```bash
 npm install
@@ -222,7 +252,7 @@ npm start
 
 Verify that the console shows "Listening on ..." without any errors. If there are errors, help me troubleshoot.
 
-## Step 11: Test
+## Step 12: Test
 
 1. In Google Chat, search for the bot by the app name from Step 5
 2. Add it to a space or start a DM with it
