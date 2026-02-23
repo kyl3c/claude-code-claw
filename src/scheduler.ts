@@ -124,11 +124,18 @@ export function startSchedulerLoop(
           cwd: process.cwd(),
         });
         const parsed = JSON.parse(output);
-        const result = parsed.result || output;
+        // CLI may return an array of messages — find the result entry
+        const resultEntry = Array.isArray(parsed)
+          ? parsed.find((e: any) => e.type === 'result')
+          : parsed;
+        const result = resultEntry?.result || 'Schedule completed but produced no output.';
         await sendFn(schedule.spaceName, result);
       } catch (err: any) {
-        const msg = `Schedule #${schedule.id} failed: ${err.message ?? err}`;
-        console.error(msg);
+        // err.message from execFileSync includes the full command (with prompt) — truncate it
+        const rawMsg = String(err.message ?? err);
+        const shortMsg = rawMsg.length > 200 ? rawMsg.slice(0, 200) + '…' : rawMsg;
+        const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
+        console.error(`Schedule #${schedule.id} failed:`, err.message ?? err);
         await sendFn(schedule.spaceName, msg).catch(() => {});
       }
 
