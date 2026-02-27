@@ -16,6 +16,7 @@ import {
   startSchedulerLoop,
 } from "./scheduler.js";
 import { loadTelosContext, getCurrentDatetime, getTelosSummary, getTelosFile, getTimezone, setTimezone } from "./telos.js";
+import { loadMemoryContext, listMemoryFiles, searchMemory } from "./memory.js";
 import {
   parseHeartbeatConfig,
   startHeartbeatLoop,
@@ -351,6 +352,20 @@ async function handleEvent(event: ChatEvent): Promise<void> {
   try {
     // Command routing (text-only, skip if just attachments)
     if (textInput === "/reset") {
+      // Flush memories before reset
+      const sessionId = getSession(spaceName);
+      if (sessionId) {
+        const today = new Date().toISOString().split("T")[0];
+        const flushPrompt = `This session is about to reset. Review the conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
+        try {
+          const flushResult = await callClaude(flushPrompt, spaceName);
+          if (!flushResult.includes("MEMORY_FLUSH_NONE")) {
+            await sendMessage(spaceName, "Saved memories before reset.");
+          }
+        } catch (err) {
+          console.error("[memory flush] failed (non-fatal):", err);
+        }
+      }
       deleteSession(spaceName);
       await sendMessage(
         spaceName,
@@ -387,12 +402,44 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       }
     } else if (textInput === "/heartbeat" && heartbeatConfig) {
       await sendMessage(spaceName, getHeartbeatStatus(heartbeatConfig));
+    } else if (textInput === "/memory") {
+      await sendMessage(spaceName, listMemoryFiles());
+    } else if (textInput.startsWith("/memory search ")) {
+      const query = textInput.slice("/memory search ".length).trim();
+      if (!query) {
+        await sendMessage(spaceName, "Usage: `/memory search <query>`");
+      } else {
+        const results = searchMemory(query);
+        if (results.length === 0) {
+          await sendMessage(spaceName, `No memory matches for "${query}".`);
+        } else {
+          const formatted = results
+            .map((r, i) => `*${i + 1}.* \`${r.file}\` (score: ${r.score.toFixed(2)})\n${r.snippet}`)
+            .join("\n\n");
+          await sendMessage(spaceName, formatted);
+        }
+      }
+    } else if (textInput === "/memory flush") {
+      const sessionId = getSession(spaceName);
+      if (!sessionId) {
+        await sendMessage(spaceName, "No active session to flush.");
+      } else {
+        const today = new Date().toISOString().split("T")[0];
+        const flushPrompt = `Review this conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
+        const flushResult = await callClaude(flushPrompt, spaceName);
+        if (flushResult.includes("MEMORY_FLUSH_NONE")) {
+          await sendMessage(spaceName, "Nothing new to save.");
+        } else {
+          await sendMessage(spaceName, "Memories saved.");
+        }
+      }
     } else {
       // Process attachments and build final input
       const attachmentPrefix = await processAttachments(attachments);
       const telosContext = loadTelosContext();
+      const memoryContext = loadMemoryContext();
       const datetime = getCurrentDatetime();
-      const input = [datetime, telosContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
+      const input = [datetime, telosContext, memoryContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
 
       // Claude bridge
       const reactedEmojis = new Set<string>();

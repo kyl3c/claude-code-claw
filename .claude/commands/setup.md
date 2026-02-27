@@ -114,6 +114,7 @@ cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 mkdir -p data/workspace
+mkdir -p data/memory/daily
 mkdir -p data/telos && cp telos/*.md data/telos/
 ```
 
@@ -125,6 +126,7 @@ Fill in `.env` with the values from the previous steps:
 Explain that:
 - `CLAUDE.md` contains project-level instructions for Claude
 - `SOUL.md` defines the bot's personality and tone
+- `data/memory/` is the bot's persistent memory — it will automatically store preferences, facts, and daily notes here across session resets
 - `data/telos/` contains TELOS personal context files — these give the AI persistent context about who you are (mission, goals, beliefs, challenges, etc.) so every response is aligned with your life. The template files have placeholder content you can replace with your own.
 
 Ask if I want to customize these files now or keep the defaults. Suggest starting with `data/telos/MISSION.md` and `data/telos/GOALS.md` — these have the highest impact on response quality.
@@ -216,6 +218,7 @@ Ask: "Which directories should the bot be able to edit files in?"
 Suggest these defaults:
 - `Edit(data/schedules.json)` — required for the scheduler
 - `Edit(data/workspace/**)` — general workspace for the bot
+- `Edit(data/memory/**)` and `Write(data/memory/**)` — required for the memory system
 
 Let them add additional paths if they want (e.g., `Edit(src/**)` for code editing).
 

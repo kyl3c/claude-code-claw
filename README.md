@@ -16,6 +16,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
 - **Personality via SOUL.md** — customize the bot's behavior and tone through a simple markdown file
 - **TELOS personal context** — give the AI persistent context about who you are (mission, goals, beliefs, challenges) so every response is aligned with your life
+- **Persistent memory** — file-based memory system (`data/memory/`) with evergreen files, daily logs, tiered temporal loading, keyword search, and pre-reset flush
 - **Heartbeat checks** *(optional)* — periodic context-aware checks against a user-maintained checklist (emails, calendar, tasks). Silent when nothing needs attention (`HEARTBEAT_OK` is suppressed), alerts only when something requires action
 
 ## How It Works
@@ -97,6 +98,7 @@ cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 cp tool-emoji.example.json tool-emoji.json
+mkdir -p data/memory/daily
 mkdir -p data/telos && cp telos/*.md data/telos/
 cp heartbeat.example.md data/heartbeat.md
 ```
@@ -142,6 +144,9 @@ If `REACTION_USER_EMAIL` is not set, reactions are silently disabled — everyth
 | `/unschedule <id>` | Delete a schedule by ID |
 | `/telos` | List loaded TELOS context files and their sizes |
 | `/telos <file>` | Show contents of a specific TELOS file (e.g., `/telos goals`) |
+| `/memory` | List all memory files with sizes |
+| `/memory search <query>` | Search memory for matching entries |
+| `/memory flush` | Manually trigger a memory flush (saves important context to memory files) |
 | `/heartbeat` | Show heartbeat status (interval, active hours, checklist state) |
 
 ## Project Structure
@@ -151,10 +156,13 @@ src/
   main.ts        # Pub/Sub listener, message routing, Claude bridge
   sessions.ts    # Per-space session persistence
   scheduler.ts   # Cron-based scheduled prompts
+  memory.ts      # Persistent memory loading, search, and context injection
   telos.ts       # TELOS context loading module
   heartbeat.ts   # Periodic heartbeat checks
 telos/           # TELOS template files (checked into repo)
 data/            # Runtime data (gitignored)
+  memory/        # Persistent memory files (gitignored)
+    daily/       # Daily log files (YYYY-MM-DD.md)
   telos/         # Your personal TELOS files (gitignored)
 .claude/
   commands/
@@ -166,6 +174,17 @@ data/            # Runtime data (gitignored)
 - **`SOUL.md`** — defines the bot's personality and communication style. Edit this to change how the bot responds. (Copied from `SOUL.example.md` during setup, gitignored so your edits stay local.)
 - **`CLAUDE.md`** — project-level instructions that Claude Code uses for context. Add domain-specific guidance here. (Copied from `CLAUDE.example.md` during setup, gitignored so your edits stay local.)
 - **`tool-emoji.json`** — maps tool names to emoji reactions shown during processing. The bot reacts with the corresponding emoji when Claude uses a tool (e.g. 📖 for Read, 🔍 for Grep). Add your own MCP tool mappings here, e.g. `"mcp__whoop__get_recent_workouts": "🏋️"`. (Copied from `tool-emoji.example.json` during setup, gitignored so your edits stay local.)
+
+### Memory
+
+The bot has a file-based memory system at `data/memory/` that persists across session resets. Memory context is automatically injected into every prompt.
+
+- **Evergreen files** (`profile.md`, `workflows.md`, `facts.md`, `preferences.md`, `decisions.md`, `secrets.md`) — always loaded in full
+- **Daily logs** (`daily/YYYY-MM-DD.md`) — recent logs loaded in full (7 days), headings only (8–30 days), older logs searchable but not injected
+- **Pre-reset flush** — on `/reset`, the bot reviews the session and saves important context before clearing
+- **Search** — `/memory search <query>` does keyword search across all memory files
+
+The `CLAUDE.example.md` template includes instructions for the bot on when and how to write memories. Customize `CLAUDE.md` to adjust these rules.
 
 ### TELOS Personal Context
 
