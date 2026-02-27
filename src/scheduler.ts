@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
-import { execFileSync } from 'child_process';
+import { spawn } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import { loadTelosContext } from './telos.js';
 
@@ -95,6 +95,62 @@ export function handleScheduleCommand(
   return 'Usage: `/schedule "<cron>" <prompt>` or `/schedules` or `/unschedule <id>`';
 }
 
+function runClaude(model: string, input: string, timeoutMs: number): Promise<string> {
+  const args = ['-p', '--model', model, '--output-format', 'stream-json', '--append-system-prompt-file', 'SOUL.md', input];
+
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn('claude', args, { cwd: process.cwd() });
+    proc.stdin.end();
+
+    let resultText: string | undefined;
+    let buffer = '';
+
+    const timeout = setTimeout(() => {
+      proc.kill();
+      reject(new Error(`Claude timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
+
+    function processLine(line: string) {
+      if (!line.trim()) return;
+      try {
+        const msg = JSON.parse(line);
+        if (msg.type === 'result') {
+          resultText = msg.result;
+        }
+      } catch {
+        // skip unparseable lines
+      }
+    }
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop()!;
+      for (const line of lines) processLine(line);
+    });
+
+    proc.stderr.on('data', (chunk: Buffer) => {
+      console.error(`[scheduler claude stderr] ${chunk.toString()}`);
+    });
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout);
+      if (buffer.trim()) processLine(buffer);
+
+      if (resultText !== undefined) {
+        resolve(resultText);
+      } else {
+        reject(new Error(`Claude exited with code ${code} and no output`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
 export function startSchedulerLoop(
   sendFn: (spaceName: string, text: string) => Promise<void>,
   model: string,
@@ -118,20 +174,9 @@ export function startSchedulerLoop(
       try {
         const telosContext = loadTelosContext();
         const promptWithContext = [telosContext, schedule.prompt].filter(Boolean).join('\n\n');
-        const output = execFileSync('claude', ['-p', '--model', model, '--output-format', 'json', '--append-system-prompt-file', 'SOUL.md', promptWithContext], {
-          timeout: timeoutMs,
-          encoding: 'utf-8',
-          cwd: process.cwd(),
-        });
-        const parsed = JSON.parse(output);
-        // CLI may return an array of messages — find the result entry
-        const resultEntry = Array.isArray(parsed)
-          ? parsed.find((e: any) => e.type === 'result')
-          : parsed;
-        const result = resultEntry?.result || 'Schedule completed but produced no output.';
+        const result = await runClaude(model, promptWithContext, timeoutMs);
         await sendFn(schedule.spaceName, result);
       } catch (err: any) {
-        // err.message from execFileSync includes the full command (with prompt) — truncate it
         const rawMsg = String(err.message ?? err);
         const shortMsg = rawMsg.length > 200 ? rawMsg.slice(0, 200) + '…' : rawMsg;
         const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
