@@ -77,9 +77,9 @@ ${checklist}
 
 export function isHeartbeatOk(response: string): boolean {
   if (response.length > 300) return false;
-  // Strip markdown formatting, quotes, and whitespace
-  const cleaned = response.replace(/[*_`#"'\n\r]/g, "").trim();
-  return cleaned === "HEARTBEAT_OK";
+  // Strip markdown formatting, quotes, punctuation, and whitespace (but keep underscores)
+  const cleaned = response.replace(/[*`#"'\n\r.,!]/g, "").trim();
+  return /^HEARTBEAT_OK$/i.test(cleaned);
 }
 
 export function pruneHeartbeatFromTranscript(spaceName: string): void {
@@ -198,6 +198,10 @@ export function startHeartbeatLoop(
       console.log(`[heartbeat] response: ${JSON.stringify(response.slice(0, 300))}`);
       if (isHeartbeatOk(response)) {
         console.log("[heartbeat] OK — suppressing message");
+        pruneHeartbeatFromTranscript(config.spaceName);
+      } else if (/HEARTBEAT_OK/i.test(response)) {
+        // Response mentions HEARTBEAT_OK but has extra content — suppress anyway
+        console.log("[heartbeat] OK (fuzzy match) — suppressing message");
         pruneHeartbeatFromTranscript(config.spaceName);
       } else {
         console.log("[heartbeat] alert — delivering message");
