@@ -15,7 +15,7 @@ import {
   handleScheduleCommand,
   startSchedulerLoop,
 } from "./scheduler.js";
-import { loadTelosContext, getTelosSummary, getTelosFile } from "./telos.js";
+import { loadTelosContext, getCurrentDatetime, getTelosSummary, getTelosFile, getTimezone, setTimezone } from "./telos.js";
 import {
   parseHeartbeatConfig,
   startHeartbeatLoop,
@@ -373,13 +373,26 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       } else {
         await sendMessage(spaceName, `TELOS file \`${fileName}\` not found. Use \`/telos\` to list available files.`);
       }
+    } else if (textInput === "/timezone") {
+      await sendMessage(spaceName, `Current timezone: \`${getTimezone()}\`\nChange with: \`/timezone America/New_York\``);
+    } else if (textInput.startsWith("/timezone ")) {
+      const tz = textInput.slice("/timezone ".length).trim();
+      try {
+        // Validate the timezone by attempting to use it
+        new Date().toLocaleString("en-US", { timeZone: tz });
+        setTimezone(tz);
+        await sendMessage(spaceName, `Timezone set to \`${tz}\``);
+      } catch {
+        await sendMessage(spaceName, `Invalid timezone: \`${tz}\`. Use IANA format like \`America/Los_Angeles\`, \`America/Denver\`, \`US/Eastern\`.`);
+      }
     } else if (textInput === "/heartbeat" && heartbeatConfig) {
       await sendMessage(spaceName, getHeartbeatStatus(heartbeatConfig));
     } else {
       // Process attachments and build final input
       const attachmentPrefix = await processAttachments(attachments);
       const telosContext = loadTelosContext();
-      const input = [telosContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
+      const datetime = getCurrentDatetime();
+      const input = [datetime, telosContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
 
       // Claude bridge
       const reactedEmojis = new Set<string>();

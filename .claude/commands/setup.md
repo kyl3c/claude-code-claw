@@ -129,6 +129,8 @@ Explain that:
 
 Ask if I want to customize these files now or keep the defaults. Suggest starting with `data/telos/MISSION.md` and `data/telos/GOALS.md` — these have the highest impact on response quality.
 
+Also mention the `/timezone` command — the bot injects the current date/time into every message so Claude always knows what time it is. The default timezone is `America/Los_Angeles` (Pacific). They can change it anytime in chat with `/timezone America/Denver`, `/timezone US/Eastern`, etc. Ask what timezone they'd like to use and set it for them by writing `data/config.json` with `{"timezone": "<IANA_TZ>"}`.
+
 ## Step 8: Heartbeat (Optional)
 
 Ask: "Do you want to enable periodic heartbeat checks? The heartbeat runs on a timer (default every 30 minutes) and checks a user-maintained checklist — things like urgent emails, upcoming calendar events, overdue tasks. If nothing needs attention, the check is silently suppressed. You only get notified when something actually needs your attention."

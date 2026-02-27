@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 import { getSession } from "./sessions.js";
-import { loadTelosContext } from "./telos.js";
+import { loadTelosContext, getCurrentDatetime } from "./telos.js";
 
 const HEARTBEAT_PATH = "data/heartbeat.md";
 
@@ -183,8 +183,9 @@ export function startHeartbeatLoop(
       }
 
       const telosContext = loadTelosContext();
+      const datetime = getCurrentDatetime();
       const prompt = buildHeartbeatPrompt(checklist);
-      const input = [telosContext, prompt].filter(Boolean).join("\n\n");
+      const input = [datetime, telosContext, prompt].filter(Boolean).join("\n\n");
 
       console.log("[heartbeat] running check...");
       const response = await callClaudeFn(input, config.spaceName);

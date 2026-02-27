@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { dirname } from 'path';
 import { spawn } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
-import { loadTelosContext } from './telos.js';
+import { loadTelosContext, getCurrentDatetime } from './telos.js';
 
 const SCHEDULES_PATH = 'data/schedules.json';
 
@@ -173,7 +173,8 @@ export function startSchedulerLoop(
       console.log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
       try {
         const telosContext = loadTelosContext();
-        const promptWithContext = [telosContext, schedule.prompt].filter(Boolean).join('\n\n');
+        const datetime = getCurrentDatetime();
+        const promptWithContext = [datetime, telosContext, schedule.prompt].filter(Boolean).join('\n\n');
         const result = await runClaude(model, promptWithContext, timeoutMs);
         await sendFn(schedule.spaceName, result);
       } catch (err: any) {
