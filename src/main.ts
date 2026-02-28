@@ -251,7 +251,10 @@ async function callClaude(
   args.push(input);
 
   return new Promise<string>((resolve, reject) => {
-    const proc = spawn("claude", args, { cwd: process.cwd() });
+    const proc = spawn("claude", args, {
+      cwd: process.cwd(),
+      env: { ...process.env, SSH_AUTH_SOCK: "" },
+    });
     proc.stdin.end();
 
     let resultText: string | undefined;

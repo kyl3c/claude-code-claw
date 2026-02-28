@@ -14,7 +14,7 @@ const EVERGREEN_FILES = [
   "facts.md",
   "preferences.md",
   "decisions.md",
-  "secrets.md",
+  // secrets.md intentionally NOT here — read on demand, not injected every prompt
 ];
 
 export interface MemorySearchResult {

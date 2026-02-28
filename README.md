@@ -121,6 +121,7 @@ You should see `Listening on projects/YOUR_PROJECT_ID/subscriptions/chat-bot-sub
 | `GOOGLE_CHAT_SUBSCRIPTION` | Full Pub/Sub subscription resource name (e.g., `projects/my-project/subscriptions/chat-bot-sub`) | Yes |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key JSON file | Yes |
 | `REACTION_USER_EMAIL` | Email of a Workspace user for emoji reactions (requires Domain-Wide Delegation — see below) | No |
+| `OP_SERVICE_ACCOUNT_TOKEN` | 1Password service account token for secret retrieval via `op read` | No |
 
 ### Emoji Reactions (Optional)
 
@@ -179,7 +180,8 @@ data/            # Runtime data (gitignored)
 
 The bot has a file-based memory system at `data/memory/` that persists across session resets. Memory context is automatically injected into every prompt.
 
-- **Evergreen files** (`profile.md`, `workflows.md`, `facts.md`, `preferences.md`, `decisions.md`, `secrets.md`) — always loaded in full
+- **Evergreen files** (`profile.md`, `workflows.md`, `facts.md`, `preferences.md`, `decisions.md`) — always loaded in full
+- **Secrets** — if you use 1Password, you can store `op://` URI references in `secrets.md` instead of plaintext credentials. Set `OP_SERVICE_ACCOUNT_TOKEN` in `.env` and add `Bash(op read:*)` to permissions. The bot will call `op read` to retrieve values on demand
 - **Daily logs** (`daily/YYYY-MM-DD.md`) — recent logs loaded in full (7 days), headings only (8–30 days), older logs searchable but not injected
 - **Pre-reset flush** — on `/reset`, the bot reviews the session and saves important context before clearing
 - **Search** — `/memory search <query>` does keyword search across all memory files

@@ -14,7 +14,12 @@ You have a persistent memory directory at `data/memory/`. Use it to remember imp
 - `facts.md` — reference info, accounts, quick notes
 - `preferences.md` — user preferences ("I prefer X", "always Y")
 - `decisions.md` — decisions made ("decided to X", "going with Y")
-- `secrets.md` — API keys, credentials, service accounts
+
+**Secrets** (on-demand, not auto-injected):
+- `secrets.md` — index of 1Password `op://` URI references
+- To retrieve a secret: read `data/memory/secrets.md` to find the URI, then run `op read "op://vault/item/field"`
+- To register a new secret: add its `op://` URI to `secrets.md` with a description
+- NEVER write actual secret values to any file — always use `op read` at point of use
 
 **Daily logs** (recent ones loaded, older ones searchable):
 - `daily/YYYY-MM-DD.md` — timestamped notes for a given day

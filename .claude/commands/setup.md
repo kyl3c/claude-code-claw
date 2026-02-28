@@ -248,7 +248,46 @@ For MCP servers where the user chose "allow all tools", add a note that they sho
 
 Write the file and confirm it looks correct before continuing.
 
-## Step 11: Install and Run
+## Step 11: 1Password Integration (Optional)
+
+Ask: "Do you want to use 1Password for secret management? This lets the bot retrieve secrets on demand via `op read` instead of storing plaintext credentials in memory files."
+
+**If yes:**
+
+1. Check that the `op` CLI is installed:
+   ```bash
+   op --version
+   ```
+   If not installed, direct them to https://developer.1password.com/docs/cli/get-started/
+
+2. Ask for their 1Password service account token. They can create one at https://my.1password.com/developer-tools/infrastructure-secrets/serviceaccount. The token starts with `ops_...`.
+
+3. Add the token to `.env`:
+   ```
+   OP_SERVICE_ACCOUNT_TOKEN=ops_...
+   ```
+
+4. Add `Bash(op read:*)` to the `permissions.allow` array in `.claude/settings.json`.
+
+5. Explain that `data/memory/secrets.md` should contain `op://` URI references instead of plaintext values. Example:
+   ```markdown
+   ## Food Logging
+   - URL: `op://claw/food-app/url`
+   - Username: `op://claw/food-app/username`
+   - Password: `op://claw/food-app/password`
+   ```
+
+6. Test the integration:
+   ```bash
+   op read "op://claw/food-app/username"
+   ```
+   Verify it returns the expected value without prompts.
+
+**If no:**
+
+Skip this step. Secrets can still be stored in `data/memory/secrets.md` but will need to be plaintext or managed manually.
+
+## Step 12: Install and Run
 
 ```bash
 npm install
@@ -257,7 +296,7 @@ npm start
 
 Verify that the console shows "Listening on ..." without any errors. If there are errors, help me troubleshoot.
 
-## Step 12: Test
+## Step 13: Test
 
 1. In Google Chat, search for the bot by the app name from Step 5
 2. Add it to a space or start a DM with it
