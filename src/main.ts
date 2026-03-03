@@ -110,22 +110,18 @@ try {
 // --- Heartbeat config & concurrency guard ---
 
 const heartbeatConfig = parseHeartbeatConfig();
-
-let claudeInFlight: Set<string> | undefined;
-if (heartbeatConfig) {
-  claudeInFlight = new Set<string>();
-}
+const inFlight = new Set<string>();
 
 async function callClaudeGuarded(
   input: string,
   spaceName: string,
 ): Promise<string | null> {
-  if (claudeInFlight!.has(spaceName)) return null;
-  claudeInFlight!.add(spaceName);
+  if (inFlight.has(spaceName)) return null;
+  inFlight.add(spaceName);
   try {
     return await callClaude(input, spaceName);
   } finally {
-    claudeInFlight!.delete(spaceName);
+    inFlight.delete(spaceName);
   }
 }
 
@@ -141,11 +137,14 @@ async function downloadAttachment(
     url,
     responseType: "arraybuffer",
   });
+  // Sanitize filename: replace non-ASCII whitespace (e.g. U+202F narrow no-break space
+  // used by modern OS time formatting before AM/PM) with regular spaces
+  const safeFilename = filename.replace(/[\u00A0\u202F\u2007\u2009\u200A]/g, " ");
   const savePath = path.resolve(
     "data",
     "workspace",
     "user-files",
-    `${Date.now()}-${filename}`,
+    `${Date.now()}-${safeFilename}`,
   );
   writeFileSync(savePath, Buffer.from(res.data));
   return savePath;
@@ -232,8 +231,9 @@ async function callClaude(
   input: string,
   spaceName: string,
   onToolCall?: (toolName: string) => void,
+  ephemeral?: boolean,
 ): Promise<string> {
-  const sessionId = getSession(spaceName);
+  const sessionId = ephemeral ? undefined : getSession(spaceName);
   const args = [
     "-p",
     "--model",
@@ -260,8 +260,10 @@ async function callClaude(
     let resultText: string | undefined;
     let resultSessionId: string | undefined;
     let buffer = "";
+    let timedOut = false;
 
     const timeout = setTimeout(() => {
+      timedOut = true;
       proc.kill();
       reject(new Error(`Claude timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
     }, CLAUDE_TIMEOUT_MS);
@@ -299,10 +301,13 @@ async function callClaude(
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
+      // If we already rejected via timeout, don't touch the settled promise
+      // (otherwise the stale-session retry spawns a zombie process whose result is lost)
+      if (timedOut) return;
       if (buffer.trim()) processLine(buffer);
 
       if (resultText !== undefined) {
-        if (resultSessionId) setSession(spaceName, resultSessionId);
+        if (resultSessionId && !ephemeral) setSession(spaceName, resultSessionId);
         resolve(resultText);
       } else if (sessionId) {
         // Stale session — retry without resume
@@ -335,24 +340,38 @@ async function handleEvent(event: ChatEvent): Promise<void> {
   const spaceName = event.space?.name;
   if (!spaceName) return;
 
-  const textInput = (
+  const rawTextInput = (
     event.message?.argumentText ??
     event.message?.text ??
     ""
   ).trim();
   const attachments = event.message?.attachment;
-  if (!textInput && !attachments?.length) return;
+  if (!rawTextInput && !attachments?.length) return;
+
+  // Detect btw prefix for parallel tasks
+  const isBtw = rawTextInput.toLowerCase().startsWith("btw ");
+  const textInput = isBtw ? rawTextInput.slice(4).trim() : rawTextInput;
 
   console.log(
-    `[${spaceName}] ${event.message?.sender?.displayName}: ${textInput.slice(0, 100)}${attachments?.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
+    `[${spaceName}]${isBtw ? " [btw]" : ""} ${event.message?.sender?.displayName}: ${textInput.slice(0, 100)}${attachments?.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
   );
 
   const messageName = event.message?.name;
 
-  // React 👀 before processing (must await since callClaude blocks the event loop)
-  if (messageName) await reactToMessage(messageName, "👀");
+  // Concurrency guard for regular (non-btw) messages
+  // IMPORTANT: acquire inFlight immediately after check, before any await,
+  // to prevent heartbeat from slipping in during the gap
+  if (!isBtw && inFlight.has(spaceName)) {
+    await sendMessage(spaceName, "I'm still working on something — prefix with `btw` to run a parallel task.");
+    if (messageName) await reactToMessage(messageName, "🕐");
+    return;
+  }
+  if (!isBtw) inFlight.add(spaceName);
 
   try {
+    // React 👀 before processing
+    if (messageName) await reactToMessage(messageName, "👀");
+
     // Command routing (text-only, skip if just attachments)
     if (textInput === "/reset") {
       // Flush memories before reset
@@ -452,7 +471,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
           reactedEmojis.add(emoji);
           reactToMessage(messageName, emoji);
         }
-      });
+      }, isBtw);
       await sendMessage(spaceName, response);
     }
 
@@ -465,6 +484,8 @@ async function handleEvent(event: ChatEvent): Promise<void> {
     await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(
       () => {},
     );
+  } finally {
+    if (!isBtw) inFlight.delete(spaceName);
   }
 }
 
