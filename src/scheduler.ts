@@ -156,6 +156,7 @@ export function startSchedulerLoop(
   sendFn: (spaceName: string, text: string) => Promise<void>,
   model: string,
   timeoutMs: number = 10 * 60 * 1000,
+  inFlight?: Set<string>,
 ): void {
   async function tick() {
     const schedules = readSchedules();
@@ -171,7 +172,14 @@ export function startSchedulerLoop(
       if (!schedule.enabled) continue;
       if (new Date(schedule.nextRun) > now) continue;
 
+      // Skip if another caller (heartbeat, user message) is using this space
+      if (inFlight?.has(schedule.spaceName)) {
+        console.log(`Schedule #${schedule.id}: skipped (space busy), will retry next tick`);
+        continue;
+      }
+
       console.log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
+      inFlight?.add(schedule.spaceName);
       try {
         const telosContext = loadTelosContext();
         const memoryContext = loadMemoryContext();
@@ -185,6 +193,8 @@ export function startSchedulerLoop(
         const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
         console.error(`Schedule #${schedule.id} failed:`, err.message ?? err);
         await sendFn(schedule.spaceName, msg).catch(() => {});
+      } finally {
+        inFlight?.delete(schedule.spaceName);
       }
 
       try {

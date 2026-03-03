@@ -511,7 +511,7 @@ async function main(): Promise<void> {
     console.error("Pub/Sub subscription error:", err);
   });
 
-  startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS);
+  startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS, inFlight);
 
   if (heartbeatConfig) {
     startHeartbeatLoop(heartbeatConfig, callClaudeGuarded, sendMessage);
