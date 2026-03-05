@@ -4,6 +4,7 @@ import path from "path";
 import { getSession } from "./sessions.js";
 import { loadTelosContext, getCurrentDatetime } from "./telos.js";
 import { loadMemoryContext } from "./memory.js";
+import { log, logError } from "./log.js";
 
 const HEARTBEAT_PATH = "data/heartbeat.md";
 
@@ -154,9 +155,9 @@ export function pruneHeartbeatFromTranscript(spaceName: string): void {
 
     const output = pruned.map((e) => JSON.stringify(e)).join("\n") + "\n";
     writeFileSync(jsonlPath, output);
-    console.log(`[heartbeat] pruned ${indicesToRemove.size} transcript entries`);
+    log(`[heartbeat] pruned ${indicesToRemove.size} transcript entries`);
   } catch (err) {
-    console.error("[heartbeat] prune failed (non-fatal):", err);
+    logError("[heartbeat] prune failed (non-fatal):", err);
   }
 }
 
@@ -171,14 +172,14 @@ export function startHeartbeatLoop(
   async function tick() {
     try {
       if (!isWithinActiveHours(config.activeStart, config.activeEnd, config.timezone)) {
-        console.log("[heartbeat] outside active hours, skipping");
+        log("[heartbeat] outside active hours, skipping");
         setTimeout(tick, config.intervalMs);
         return;
       }
 
       const checklist = loadHeartbeatChecklist();
       if (!checklist) {
-        console.log("[heartbeat] no checklist or empty, skipping");
+        log("[heartbeat] no checklist or empty, skipping");
         setTimeout(tick, config.intervalMs);
         return;
       }
@@ -189,29 +190,29 @@ export function startHeartbeatLoop(
       const prompt = buildHeartbeatPrompt(checklist);
       const input = [datetime, telosContext, memoryContext, prompt].filter(Boolean).join("\n\n");
 
-      console.log("[heartbeat] running check...");
+      log("[heartbeat] running check...");
       const response = await callClaudeFn(input, config.spaceName);
 
       if (response === null) {
-        console.log("[heartbeat] skipped (claude busy)");
+        log("[heartbeat] skipped (claude busy)");
         setTimeout(tick, config.intervalMs);
         return;
       }
 
-      console.log(`[heartbeat] response: ${JSON.stringify(response.slice(0, 300))}`);
+      log(`[heartbeat] response: ${JSON.stringify(response.slice(0, 300))}`);
       if (isHeartbeatOk(response)) {
-        console.log("[heartbeat] OK — suppressing message");
+        log("[heartbeat] OK — suppressing message");
         pruneHeartbeatFromTranscript(config.spaceName);
       } else if (/HEARTBEAT_OK/i.test(response)) {
         // Response mentions HEARTBEAT_OK but has extra content — suppress anyway
-        console.log("[heartbeat] OK (fuzzy match) — suppressing message");
+        log("[heartbeat] OK (fuzzy match) — suppressing message");
         pruneHeartbeatFromTranscript(config.spaceName);
       } else {
-        console.log("[heartbeat] alert — delivering message");
+        log("[heartbeat] alert — delivering message");
         await sendFn(config.spaceName, response);
       }
     } catch (err) {
-      console.error("[heartbeat] tick error:", err);
+      logError("[heartbeat] tick error:", err);
     }
 
     setTimeout(tick, config.intervalMs);
@@ -219,7 +220,7 @@ export function startHeartbeatLoop(
 
   setTimeout(tick, config.intervalMs);
   const intervalMin = config.intervalMs / 60000;
-  console.log(
+  log(
     `Heartbeat started (${intervalMin}m interval, active ${config.activeStart}-${config.activeEnd} ${config.timezone})`,
   );
 }

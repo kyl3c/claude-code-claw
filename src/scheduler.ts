@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { CronExpressionParser } from 'cron-parser';
 import { loadTelosContext, getCurrentDatetime } from './telos.js';
 import { loadMemoryContext } from './memory.js';
+import { log, logError } from './log.js';
 
 const SCHEDULES_PATH = 'data/schedules.json';
 
@@ -32,9 +33,9 @@ export function loadSchedules(): void {
   if (!existsSync(SCHEDULES_PATH)) {
     mkdirSync(dirname(SCHEDULES_PATH), { recursive: true });
     writeSchedules([]);
-    console.log('Created empty schedules file');
+    log('Created empty schedules file');
   } else {
-    console.log('Schedules file found, will load on first tick');
+    log('Schedules file found, will load on first tick');
   }
 }
 
@@ -112,7 +113,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
     const timeout = setTimeout(() => {
       timedOut = true;
       const staleSec = ((Date.now() - lastToolTime) / 1000).toFixed(0);
-      console.error(`${tag} timed out after ${timeoutMs / 1000}s (last tool activity ${staleSec}s ago)`);
+      logError(`${tag} timed out after ${timeoutMs / 1000}s (last tool activity ${staleSec}s ago)`);
       proc.kill();
       // SIGKILL fallback if process doesn't exit within 5s
       setTimeout(() => {
@@ -128,7 +129,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
         if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
           for (const block of msg.message.content) {
             if (block.type === 'tool_use' && block.name) {
-              console.log(`${tag} tool: ${block.name}`);
+              log(`${tag} tool: ${block.name}`);
               lastToolTime = Date.now();
             }
           }
@@ -148,7 +149,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
     });
 
     proc.stderr.on('data', (chunk: Buffer) => {
-      console.error(`${tag} stderr: ${chunk.toString()}`);
+      logError(`${tag} stderr: ${chunk.toString()}`);
     });
 
     proc.on('close', (code) => {
@@ -192,11 +193,11 @@ export function startSchedulerLoop(
 
       // Skip if another caller (heartbeat, user message) is using this space
       if (inFlight?.has(schedule.spaceName)) {
-        console.log(`Schedule #${schedule.id}: skipped (space busy), will retry next tick`);
+        log(`Schedule #${schedule.id}: skipped (space busy), will retry next tick`);
         continue;
       }
 
-      console.log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
+      log(`Running schedule #${schedule.id}: ${schedule.prompt}`);
       inFlight?.add(schedule.spaceName);
       try {
         const telosContext = loadTelosContext();
@@ -209,7 +210,7 @@ export function startSchedulerLoop(
         const rawMsg = String(err.message ?? err);
         const shortMsg = rawMsg.length > 200 ? rawMsg.slice(0, 200) + '…' : rawMsg;
         const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
-        console.error(`Schedule #${schedule.id} failed:`, err.message ?? err);
+        logError(`Schedule #${schedule.id} failed:`, err.message ?? err);
         await sendFn(schedule.spaceName, msg).catch(() => {});
       } finally {
         inFlight?.delete(schedule.spaceName);
@@ -232,5 +233,5 @@ export function startSchedulerLoop(
   }
 
   setTimeout(tick, 60_000);
-  console.log('Scheduler started (60s poll, hot-reload enabled)');
+  log('Scheduler started (60s poll, hot-reload enabled)');
 }

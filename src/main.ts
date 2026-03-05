@@ -22,6 +22,7 @@ import {
   startHeartbeatLoop,
   getHeartbeatStatus,
 } from "./heartbeat.js";
+import { log, logError } from "./log.js";
 
 
 // --- Types ---
@@ -94,7 +95,7 @@ if (REACTION_USER_EMAIL) {
     clientOptions: { subject: REACTION_USER_EMAIL },
   });
   reactionsClient = new ChatServiceClient({ authClient: await reactionsAuth.getClient() as any });
-  console.log(`Reactions client ready (impersonating ${REACTION_USER_EMAIL})`);
+  log(`Reactions client ready (impersonating ${REACTION_USER_EMAIL})`);
 }
 
 // --- Tool emoji map ---
@@ -102,7 +103,7 @@ if (REACTION_USER_EMAIL) {
 let toolEmoji: Record<string, string> = {};
 try {
   toolEmoji = JSON.parse(readFileSync("tool-emoji.json", "utf-8"));
-  console.log(`Loaded ${Object.keys(toolEmoji).length} tool emoji mapping(s)`);
+  log(`Loaded ${Object.keys(toolEmoji).length} tool emoji mapping(s)`);
 } catch {
   // No custom map — tool reactions disabled
 }
@@ -164,9 +165,9 @@ async function processAttachments(
       lines.push(
         `The user attached ${filename} at ${filePath}. Use the Read tool to read this file, then respond to their message.`,
       );
-      console.log(`[attachment] downloaded ${filename} -> ${filePath}`);
+      log(`[attachment] downloaded ${filename} -> ${filePath}`);
     } catch (err) {
-      console.error(`[attachment] failed to download ${filename}:`, err);
+      logError(`[attachment] failed to download ${filename}:`, err);
     }
   }
   return lines.join("\n");
@@ -185,7 +186,7 @@ async function reactToMessage(
       reaction: { emoji: { unicode: emoji } },
     });
   } catch (err) {
-    console.error(`Failed to react with ${emoji} on ${messageName}:`, err);
+    logError(`Failed to react with ${emoji} on ${messageName}:`, err);
   }
 }
 
@@ -217,7 +218,7 @@ async function sendMessage(spaceName: string, text: string): Promise<void> {
         message: { text: chunk },
       });
     } catch (err) {
-      console.error(`Failed to send to ${spaceName}:`, err);
+      logError(`Failed to send to ${spaceName}:`, err);
       throw err;
     }
   }
@@ -275,7 +276,7 @@ async function callClaude(
         if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
           for (const block of msg.message.content) {
             if (block.type === "tool_use" && block.name) {
-              console.log(`[claude] tool: ${block.name}`);
+              log(`[claude] tool: ${block.name}`);
               onToolCall?.(block.name);
             }
           }
@@ -296,7 +297,7 @@ async function callClaude(
     });
 
     proc.stderr.on("data", (chunk: Buffer) => {
-      console.error(`[claude stderr] ${chunk.toString()}`);
+      logError(`[claude stderr] ${chunk.toString()}`);
     });
 
     proc.on("close", (code) => {
@@ -311,7 +312,7 @@ async function callClaude(
         resolve(resultText);
       } else if (sessionId) {
         // Stale session — retry without resume
-        console.log(
+        log(
           `[${spaceName}] session ${sessionId} is stale, retrying without resume`,
         );
         deleteSession(spaceName);
@@ -352,7 +353,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
   const isBtw = rawTextInput.toLowerCase().startsWith("btw ");
   const textInput = isBtw ? rawTextInput.slice(4).trim() : rawTextInput;
 
-  console.log(
+  log(
     `[${spaceName}]${isBtw ? " [btw]" : ""} ${event.message?.sender?.displayName}: ${textInput.slice(0, 100)}${attachments?.length ? ` [+${attachments.length} attachment(s)]` : ""}`,
   );
 
@@ -385,7 +386,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
             await sendMessage(spaceName, "Saved memories before reset.");
           }
         } catch (err) {
-          console.error("[memory flush] failed (non-fatal):", err);
+          logError("[memory flush] failed (non-fatal):", err);
         }
       }
       deleteSession(spaceName);
@@ -478,7 +479,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
     // React ✅ on success
     if (messageName) await reactToMessage(messageName, "✅");
   } catch (err: any) {
-    console.error(`Error handling message:`, err);
+    logError(`Error handling message:`, err);
     // React ❌ on error
     if (messageName) await reactToMessage(messageName, "❌");
     await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(
@@ -503,12 +504,12 @@ async function main(): Promise<void> {
       const event: ChatEvent = JSON.parse(message.data.toString());
       handleEvent(event);
     } catch (err) {
-      console.error("Failed to parse Pub/Sub message:", err);
+      logError("Failed to parse Pub/Sub message:", err);
     }
   });
 
   subscription.on("error", (err) => {
-    console.error("Pub/Sub subscription error:", err);
+    logError("Pub/Sub subscription error:", err);
   });
 
   startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS, inFlight);
@@ -517,10 +518,10 @@ async function main(): Promise<void> {
     startHeartbeatLoop(heartbeatConfig, callClaudeGuarded, sendMessage);
   }
 
-  console.log(`Listening on ${SUBSCRIPTION}`);
+  log(`Listening on ${SUBSCRIPTION}`);
 }
 
 main().catch((err) => {
-  console.error("Fatal:", err);
+  logError("Fatal:", err);
   process.exit(1);
 });
