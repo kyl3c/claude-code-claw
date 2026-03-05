@@ -96,8 +96,9 @@ export function handleScheduleCommand(
   return 'Usage: `/schedule "<cron>" <prompt>` or `/schedules` or `/unschedule <id>`';
 }
 
-function runClaude(model: string, input: string, timeoutMs: number): Promise<string> {
-  const args = ['-p', '--model', model, '--output-format', 'stream-json', '--append-system-prompt-file', 'SOUL.md', input];
+function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number): Promise<string> {
+  const tag = scheduleId != null ? `[schedule #${scheduleId}]` : '[scheduler]';
+  const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--append-system-prompt-file', 'SOUL.md', input];
 
   return new Promise<string>((resolve, reject) => {
     const proc = spawn('claude', args, { cwd: process.cwd() });
@@ -105,9 +106,18 @@ function runClaude(model: string, input: string, timeoutMs: number): Promise<str
 
     let resultText: string | undefined;
     let buffer = '';
+    let timedOut = false;
+    let lastToolTime = Date.now();
 
     const timeout = setTimeout(() => {
+      timedOut = true;
+      const staleSec = ((Date.now() - lastToolTime) / 1000).toFixed(0);
+      console.error(`${tag} timed out after ${timeoutMs / 1000}s (last tool activity ${staleSec}s ago)`);
       proc.kill();
+      // SIGKILL fallback if process doesn't exit within 5s
+      setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch {}
+      }, 5000);
       reject(new Error(`Claude timed out after ${timeoutMs / 1000}s`));
     }, timeoutMs);
 
@@ -115,7 +125,14 @@ function runClaude(model: string, input: string, timeoutMs: number): Promise<str
       if (!line.trim()) return;
       try {
         const msg = JSON.parse(line);
-        if (msg.type === 'result') {
+        if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+          for (const block of msg.message.content) {
+            if (block.type === 'tool_use' && block.name) {
+              console.log(`${tag} tool: ${block.name}`);
+              lastToolTime = Date.now();
+            }
+          }
+        } else if (msg.type === 'result') {
           resultText = msg.result;
         }
       } catch {
@@ -131,11 +148,12 @@ function runClaude(model: string, input: string, timeoutMs: number): Promise<str
     });
 
     proc.stderr.on('data', (chunk: Buffer) => {
-      console.error(`[scheduler claude stderr] ${chunk.toString()}`);
+      console.error(`${tag} stderr: ${chunk.toString()}`);
     });
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
+      if (timedOut) return;
       if (buffer.trim()) processLine(buffer);
 
       if (resultText !== undefined) {
@@ -185,7 +203,7 @@ export function startSchedulerLoop(
         const memoryContext = loadMemoryContext();
         const datetime = getCurrentDatetime();
         const promptWithContext = [datetime, telosContext, memoryContext, schedule.prompt].filter(Boolean).join('\n\n');
-        const result = await runClaude(model, promptWithContext, timeoutMs);
+        const result = await runClaude(model, promptWithContext, timeoutMs, schedule.id);
         await sendFn(schedule.spaceName, result);
       } catch (err: any) {
         const rawMsg = String(err.message ?? err);
