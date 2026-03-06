@@ -97,6 +97,8 @@ export function handleScheduleCommand(
   return 'Usage: `/schedule "<cron>" <prompt>` or `/schedules` or `/unschedule <id>`';
 }
 
+const STALL_TIMEOUT_MS = Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 5 * 60 * 1000;
+
 function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number): Promise<string> {
   const tag = scheduleId != null ? `[schedule #${scheduleId}]` : '[scheduler]';
   const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--append-system-prompt-file', 'SOUL.md', input];
@@ -108,19 +110,29 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
     let resultText: string | undefined;
     let buffer = '';
     let timedOut = false;
-    let lastToolTime = Date.now();
+    let lastActivity = Date.now();
+
+    function killStale(reason: string) {
+      if (timedOut) return;
+      timedOut = true;
+      logError(`${tag} ${reason}`);
+      proc.kill();
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
+      reject(new Error(reason));
+    }
 
     const timeout = setTimeout(() => {
-      timedOut = true;
-      const staleSec = ((Date.now() - lastToolTime) / 1000).toFixed(0);
-      logError(`${tag} timed out after ${timeoutMs / 1000}s (last tool activity ${staleSec}s ago)`);
-      proc.kill();
-      // SIGKILL fallback if process doesn't exit within 5s
-      setTimeout(() => {
-        try { proc.kill('SIGKILL'); } catch {}
-      }, 5000);
-      reject(new Error(`Claude timed out after ${timeoutMs / 1000}s`));
+      const staleSec = ((Date.now() - lastActivity) / 1000).toFixed(0);
+      killStale(`timed out after ${timeoutMs / 1000}s (no output for ${staleSec}s)`);
     }, timeoutMs);
+
+    const stallCheck = setInterval(() => {
+      const staleSec = (Date.now() - lastActivity) / 1000;
+      if (staleSec >= STALL_TIMEOUT_MS / 1000) {
+        clearInterval(stallCheck);
+        killStale(`stalled (no output for ${staleSec.toFixed(0)}s)`);
+      }
+    }, 30_000);
 
     function processLine(line: string) {
       if (!line.trim()) return;
@@ -130,7 +142,6 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
           for (const block of msg.message.content) {
             if (block.type === 'tool_use' && block.name) {
               log(`${tag} tool: ${block.name}`);
-              lastToolTime = Date.now();
             }
           }
         } else if (msg.type === 'result') {
@@ -142,6 +153,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
     }
 
     proc.stdout.on('data', (chunk: Buffer) => {
+      lastActivity = Date.now();
       buffer += chunk.toString();
       const lines = buffer.split('\n');
       buffer = lines.pop()!;
@@ -154,6 +166,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
+      clearInterval(stallCheck);
       if (timedOut) return;
       if (buffer.trim()) processLine(buffer);
 
@@ -166,6 +179,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
 
     proc.on('error', (err) => {
       clearTimeout(timeout);
+      clearInterval(stallCheck);
       reject(err);
     });
   });

@@ -71,6 +71,8 @@ const MAX_MESSAGE_LENGTH = 4096;
 const MODEL = process.env.ANTHROPIC_MODEL || "sonnet";
 const CLAUDE_TIMEOUT_MS =
   Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 1000;
+const CLAUDE_STALL_TIMEOUT_MS =
+  Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 5 * 60 * 1000;
 
 // --- Clients ---
 
@@ -262,12 +264,28 @@ async function callClaude(
     let resultSessionId: string | undefined;
     let buffer = "";
     let timedOut = false;
+    let lastActivity = Date.now();
+
+    function killStale(reason: string) {
+      if (timedOut) return;
+      timedOut = true;
+      log(`[claude] ${reason}`);
+      proc.kill();
+      setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
+      reject(new Error(reason));
+    }
 
     const timeout = setTimeout(() => {
-      timedOut = true;
-      proc.kill();
-      reject(new Error(`Claude timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
+      killStale(`Claude timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`);
     }, CLAUDE_TIMEOUT_MS);
+
+    const stallCheck = setInterval(() => {
+      const staleSec = (Date.now() - lastActivity) / 1000;
+      if (staleSec >= CLAUDE_STALL_TIMEOUT_MS / 1000) {
+        clearInterval(stallCheck);
+        killStale(`Claude stalled (no output for ${(staleSec).toFixed(0)}s)`);
+      }
+    }, 30_000);
 
     function processLine(line: string) {
       if (!line.trim()) return;
@@ -290,6 +308,7 @@ async function callClaude(
     }
 
     proc.stdout.on("data", (chunk: Buffer) => {
+      lastActivity = Date.now();
       buffer += chunk.toString();
       const lines = buffer.split("\n");
       buffer = lines.pop()!;
@@ -302,7 +321,8 @@ async function callClaude(
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
-      // If we already rejected via timeout, don't touch the settled promise
+      clearInterval(stallCheck);
+      // If we already rejected via timeout/stall, don't touch the settled promise
       // (otherwise the stale-session retry spawns a zombie process whose result is lost)
       if (timedOut) return;
       if (buffer.trim()) processLine(buffer);
@@ -324,6 +344,7 @@ async function callClaude(
 
     proc.on("error", (err) => {
       clearTimeout(timeout);
+      clearInterval(stallCheck);
       reject(err);
     });
   });
