@@ -122,6 +122,8 @@ You should see `Listening on projects/YOUR_PROJECT_ID/subscriptions/chat-bot-sub
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to GCP service account key JSON file | Yes |
 | `REACTION_USER_EMAIL` | Email of a Workspace user for emoji reactions (requires Domain-Wide Delegation — see below) | No |
 | `OP_SERVICE_ACCOUNT_TOKEN` | 1Password service account token for secret retrieval via `op read` | No |
+| `CLAUDE_TIMEOUT_MS` | Max time for a Claude process before killing it | No (default: 600000 / 10 min) |
+| `CLAUDE_STALL_TIMEOUT_MS` | Max time with no output before killing a stalled process | No (default: 300000 / 5 min) |
 
 ### Emoji Reactions (Optional)
 
@@ -160,8 +162,10 @@ src/
   memory.ts      # Persistent memory loading, search, and context injection
   telos.ts       # TELOS context loading module
   heartbeat.ts   # Periodic heartbeat checks
+  log.ts         # Timestamped logging with file tee
 telos/           # TELOS template files (checked into repo)
 data/            # Runtime data (gitignored)
+  logs/          # Rolling application log
   memory/        # Persistent memory files (gitignored)
     daily/       # Daily log files (YYYY-MM-DD.md)
   telos/         # Your personal TELOS files (gitignored)
@@ -216,6 +220,22 @@ The heartbeat runs periodic checks against a user-maintained checklist — email
 **Transcript pruning:** When a heartbeat returns `HEARTBEAT_OK`, the heartbeat exchange is automatically pruned from the Claude CLI session transcript (JSONL file) to keep context clean. Only heartbeats that surfaced real alerts remain in history.
 
 **Concurrency:** The heartbeat uses a guarded `callClaude` wrapper — if a user message is already being processed, the heartbeat tick is skipped. Interactive messages are never blocked.
+
+### Logging & Self-Debugging
+
+All log output is timestamped (using your configured timezone) and teed to `data/logs/app.log` in addition to stdout/stderr. The log file rolls at 1MB to prevent unbounded growth.
+
+Because the bot has read access to its own codebase and data directory, it can read this log file when asked — meaning you can ask it via Google Chat to debug itself ("what happened with schedule #3?", "why did the last heartbeat fail?").
+
+To enable this, add a pointer to the log file in your `CLAUDE.md`:
+
+```markdown
+**Logs:**
+- `data/logs/app.log` — live application log (heartbeats, tool calls, errors, timeouts)
+- If asked to debug yourself or check what happened, read this file
+```
+
+**Stall detection:** If a Claude process produces no output for 5 minutes (e.g. a hanging MCP tool), it is killed early rather than waiting for the full timeout. Configurable via `CLAUDE_STALL_TIMEOUT_MS`.
 
 ## Adding MCP Servers
 
