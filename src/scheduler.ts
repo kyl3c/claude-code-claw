@@ -97,7 +97,7 @@ export function handleScheduleCommand(
   return 'Usage: `/schedule "<cron>" <prompt>` or `/schedules` or `/unschedule <id>`';
 }
 
-const STALL_TIMEOUT_MS = Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 5 * 60 * 1000;
+const STALL_TIMEOUT_MS = Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 2 * 60 * 1000;
 
 function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number): Promise<string> {
   const tag = scheduleId != null ? `[schedule #${scheduleId}]` : '[scheduler]';
@@ -111,11 +111,14 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
     let buffer = '';
     let timedOut = false;
     let lastActivity = Date.now();
+    let gotInit = false;
+    let toolCount = 0;
 
     function killStale(reason: string) {
       if (timedOut) return;
       timedOut = true;
-      logError(`${tag} ${reason}`);
+      const phase = gotInit ? `init OK, ${toolCount} tool(s)` : 'never initialized (MCP startup hung?)';
+      logError(`${tag} ${reason} [${phase}]`);
       proc.kill();
       setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 5000);
       reject(new Error(reason));
@@ -132,15 +135,25 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
         clearInterval(stallCheck);
         killStale(`stalled (no output for ${staleSec.toFixed(0)}s)`);
       }
-    }, 30_000);
+    }, 15_000);
 
     function processLine(line: string) {
       if (!line.trim()) return;
       try {
         const msg = JSON.parse(line);
-        if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
+        if (msg.type === 'system' && msg.subtype === 'init') {
+          gotInit = true;
+          const mcpServers: { name: string; status: string }[] = msg.mcp_servers ?? [];
+          const failed = mcpServers.filter(s => s.status !== 'connected');
+          if (failed.length > 0) {
+            log(`${tag} init: ${mcpServers.length} MCP servers, ${failed.length} not connected: ${failed.map(s => `${s.name}(${s.status})`).join(', ')}`);
+          } else {
+            log(`${tag} init: ${mcpServers.length} MCP servers all connected`);
+          }
+        } else if (msg.type === 'assistant' && Array.isArray(msg.message?.content)) {
           for (const block of msg.message.content) {
             if (block.type === 'tool_use' && block.name) {
+              toolCount++;
               log(`${tag} tool: ${block.name}`);
             }
           }
@@ -218,14 +231,39 @@ export function startSchedulerLoop(
         const memoryContext = loadMemoryContext();
         const datetime = getCurrentDatetime();
         const promptWithContext = [datetime, telosContext, memoryContext, schedule.prompt].filter(Boolean).join('\n\n');
-        const result = await runClaude(model, promptWithContext, timeoutMs, schedule.id);
-        await sendFn(schedule.spaceName, result);
+
+        let result: string | undefined;
+        let lastErr: Error | undefined;
+        const MAX_ATTEMPTS = 2;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+          try {
+            result = await runClaude(model, promptWithContext, timeoutMs, schedule.id);
+            break;
+          } catch (err: any) {
+            lastErr = err;
+            const isStall = String(err.message ?? '').includes('stall') || String(err.message ?? '').includes('timed out');
+            if (attempt < MAX_ATTEMPTS && isStall) {
+              log(`Schedule #${schedule.id}: stalled, retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
+              continue;
+            }
+            break;
+          }
+        }
+
+        if (result !== undefined) {
+          await sendFn(schedule.spaceName, result);
+        } else {
+          const rawMsg = String(lastErr?.message ?? lastErr);
+          const shortMsg = rawMsg.length > 200 ? rawMsg.slice(0, 200) + '…' : rawMsg;
+          const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
+          logError(`Schedule #${schedule.id} failed:`, lastErr?.message ?? lastErr);
+          await sendFn(schedule.spaceName, msg).catch(() => {});
+        }
       } catch (err: any) {
         const rawMsg = String(err.message ?? err);
         const shortMsg = rawMsg.length > 200 ? rawMsg.slice(0, 200) + '…' : rawMsg;
-        const msg = `Schedule #${schedule.id} failed: ${shortMsg}`;
-        logError(`Schedule #${schedule.id} failed:`, err.message ?? err);
-        await sendFn(schedule.spaceName, msg).catch(() => {});
+        logError(`Schedule #${schedule.id} unexpected error:`, err.message ?? err);
+        await sendFn(schedule.spaceName, `Schedule #${schedule.id} failed: ${shortMsg}`).catch(() => {});
       } finally {
         inFlight?.delete(schedule.spaceName);
       }

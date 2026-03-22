@@ -72,7 +72,7 @@ const MODEL = process.env.ANTHROPIC_MODEL || "sonnet";
 const CLAUDE_TIMEOUT_MS =
   Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 1000;
 const CLAUDE_STALL_TIMEOUT_MS =
-  Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 5 * 60 * 1000;
+  Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 2 * 60 * 1000;
 
 // --- Clients ---
 
@@ -265,11 +265,14 @@ async function callClaude(
     let buffer = "";
     let timedOut = false;
     let lastActivity = Date.now();
+    let gotInit = false;
+    let toolCount = 0;
 
     function killStale(reason: string) {
       if (timedOut) return;
       timedOut = true;
-      log(`[claude] ${reason}`);
+      const phase = gotInit ? `init OK, ${toolCount} tool(s)` : "never initialized (MCP startup hung?)";
+      log(`[claude] ${reason} [${phase}]`);
       proc.kill();
       setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 5000);
       reject(new Error(reason));
@@ -285,15 +288,25 @@ async function callClaude(
         clearInterval(stallCheck);
         killStale(`Claude stalled (no output for ${(staleSec).toFixed(0)}s)`);
       }
-    }, 30_000);
+    }, 15_000);
 
     function processLine(line: string) {
       if (!line.trim()) return;
       try {
         const msg = JSON.parse(line);
-        if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
+        if (msg.type === "system" && msg.subtype === "init") {
+          gotInit = true;
+          const mcpServers: { name: string; status: string }[] = msg.mcp_servers ?? [];
+          const failed = mcpServers.filter((s: { status: string }) => s.status !== "connected");
+          if (failed.length > 0) {
+            log(`[claude] init: ${mcpServers.length} MCP servers, ${failed.length} not connected: ${failed.map((s: { name: string; status: string }) => `${s.name}(${s.status})`).join(", ")}`);
+          } else {
+            log(`[claude] init: ${mcpServers.length} MCP servers all connected`);
+          }
+        } else if (msg.type === "assistant" && Array.isArray(msg.message?.content)) {
           for (const block of msg.message.content) {
             if (block.type === "tool_use" && block.name) {
+              toolCount++;
               log(`[claude] tool: ${block.name}`);
               onToolCall?.(block.name);
             }
