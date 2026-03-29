@@ -229,6 +229,7 @@ async function sendMessage(spaceName: string, text: string): Promise<void> {
 // --- Claude bridge ---
 
 const SOUL_PATH = "SOUL.md";
+const MCP_HEADLESS_CONFIG = "mcp-headless.json";
 
 async function callClaude(
   input: string,
@@ -246,12 +247,15 @@ async function callClaude(
     "--verbose",
     "--append-system-prompt-file",
     SOUL_PATH,
+    "--strict-mcp-config",
+    "--mcp-config",
+    MCP_HEADLESS_CONFIG,
     "--chrome",
   ];
   if (sessionId) {
     args.push("--resume", sessionId);
   }
-  args.push(input);
+  args.push('--', input);
 
   return new Promise<string>((resolve, reject) => {
     const proc = spawn("claude", args, {

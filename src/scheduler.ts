@@ -99,9 +99,11 @@ export function handleScheduleCommand(
 
 const STALL_TIMEOUT_MS = Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 2 * 60 * 1000;
 
+const MCP_HEADLESS_CONFIG = 'mcp-headless.json';
+
 function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number): Promise<string> {
   const tag = scheduleId != null ? `[schedule #${scheduleId}]` : '[scheduler]';
-  const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--append-system-prompt-file', 'SOUL.md', input];
+  const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--append-system-prompt-file', 'SOUL.md', '--strict-mcp-config', '--mcp-config', MCP_HEADLESS_CONFIG, '--', input];
 
   return new Promise<string>((resolve, reject) => {
     const proc = spawn('claude', args, { cwd: process.cwd() });
