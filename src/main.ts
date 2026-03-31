@@ -11,6 +11,24 @@ import {
   deleteSession,
 } from "./sessions.js";
 import {
+  initOrchestrator,
+  routeMessage,
+  getThreadSession,
+  setThreadSession,
+  markBusy,
+  markIdle,
+  isThreadBusy,
+  isSpaceBusy,
+  enqueueMessage,
+  dequeueNext,
+  updateSummary,
+  pruneStaleThreads,
+  clearThreadsForSpace,
+  getMostRecentThread,
+  formatThreadList,
+  type QueueItem,
+} from "./orchestrator.js";
+import {
   loadSchedules,
   handleScheduleCommand,
   startSchedulerLoop,
@@ -73,6 +91,8 @@ const CLAUDE_TIMEOUT_MS =
   Number(process.env.CLAUDE_TIMEOUT_MS) || 10 * 60 * 1000;
 const CLAUDE_STALL_TIMEOUT_MS =
   Number(process.env.CLAUDE_STALL_TIMEOUT_MS) || 2 * 60 * 1000;
+const CLAUDE_PROGRESS_TIMEOUT_MS =
+  Number(process.env.CLAUDE_PROGRESS_TIMEOUT_MS) || 5 * 60 * 1000;
 
 // --- Clients ---
 
@@ -119,10 +139,12 @@ async function callClaudeGuarded(
   input: string,
   spaceName: string,
 ): Promise<string | null> {
-  if (inFlight.has(spaceName)) return null;
+  if (isSpaceBusy(spaceName)) return null;
+  // Heartbeat doesn't create threads — uses spaceName session directly
   inFlight.add(spaceName);
   try {
-    return await callClaude(input, spaceName);
+    const result = await callClaude(input, spaceName);
+    return result.text;
   } finally {
     inFlight.delete(spaceName);
   }
@@ -236,8 +258,11 @@ async function callClaude(
   spaceName: string,
   onToolCall?: (toolName: string) => void,
   ephemeral?: boolean,
-): Promise<string> {
-  const sessionId = ephemeral ? undefined : getSession(spaceName);
+  explicitSessionId?: string,
+): Promise<{ text: string; sessionId?: string }> {
+  const sessionId = ephemeral
+    ? undefined
+    : explicitSessionId ?? getSession(spaceName);
   const args = [
     "-p",
     "--model",
@@ -257,7 +282,7 @@ async function callClaude(
   }
   args.push('--', input);
 
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<{ text: string; sessionId?: string }>((resolve, reject) => {
     const proc = spawn("claude", args, {
       cwd: process.cwd(),
       env: { ...process.env, SSH_AUTH_SOCK: "" },
@@ -269,6 +294,7 @@ async function callClaude(
     let buffer = "";
     let timedOut = false;
     let lastActivity = Date.now();
+    let lastProgress = Date.now();
     let gotInit = false;
     let toolCount = 0;
 
@@ -294,12 +320,21 @@ async function callClaude(
       }
     }, 15_000);
 
+    const progressCheck = setInterval(() => {
+      const noProgressSec = (Date.now() - lastProgress) / 1000;
+      if (noProgressSec >= CLAUDE_PROGRESS_TIMEOUT_MS / 1000) {
+        clearInterval(progressCheck);
+        killStale(`Claude no progress for ${noProgressSec.toFixed(0)}s (${toolCount} tool(s), has output but no tool calls or result)`);
+      }
+    }, 15_000);
+
     function processLine(line: string) {
       if (!line.trim()) return;
       try {
         const msg = JSON.parse(line);
         if (msg.type === "system" && msg.subtype === "init") {
           gotInit = true;
+          lastProgress = Date.now();
           const mcpServers: { name: string; status: string }[] = msg.mcp_servers ?? [];
           const failed = mcpServers.filter((s: { status: string }) => s.status !== "connected");
           if (failed.length > 0) {
@@ -311,11 +346,15 @@ async function callClaude(
           for (const block of msg.message.content) {
             if (block.type === "tool_use" && block.name) {
               toolCount++;
-              log(`[claude] tool: ${block.name}`);
+              lastProgress = Date.now();
+              const inputStr = block.input ? JSON.stringify(block.input) : '';
+              const truncated = inputStr.length > 200 ? inputStr.slice(0, 200) + '…' : inputStr;
+              log(`[claude] tool: ${block.name} ${truncated}`);
               onToolCall?.(block.name);
             }
           }
         } else if (msg.type === "result") {
+          lastProgress = Date.now();
           resultText = msg.result;
           resultSessionId = msg.session_id;
         }
@@ -339,21 +378,28 @@ async function callClaude(
     proc.on("close", (code) => {
       clearTimeout(timeout);
       clearInterval(stallCheck);
+      clearInterval(progressCheck);
       // If we already rejected via timeout/stall, don't touch the settled promise
       // (otherwise the stale-session retry spawns a zombie process whose result is lost)
       if (timedOut) return;
       if (buffer.trim()) processLine(buffer);
 
       if (resultText !== undefined) {
-        if (resultSessionId && !ephemeral) setSession(spaceName, resultSessionId);
-        resolve(resultText);
+        // Persist session for spaceName-based callers (heartbeat compat)
+        if (resultSessionId && !ephemeral && !explicitSessionId) {
+          setSession(spaceName, resultSessionId);
+        }
+        resolve({ text: resultText, sessionId: resultSessionId });
       } else if (sessionId) {
         // Stale session — retry without resume
         log(
           `[${spaceName}] session ${sessionId} is stale, retrying without resume`,
         );
-        deleteSession(spaceName);
-        callClaude(input, spaceName, onToolCall).then(resolve, reject);
+        if (!explicitSessionId) {
+          deleteSession(spaceName);
+        }
+        // Retry without any session — caller will persist the new one
+        callClaude(input, spaceName, onToolCall, ephemeral).then(resolve, reject);
       } else {
         reject(new Error(`Claude exited with code ${code} and no output`));
       }
@@ -362,6 +408,7 @@ async function callClaude(
     proc.on("error", (err) => {
       clearTimeout(timeout);
       clearInterval(stallCheck);
+      clearInterval(progressCheck);
       reject(err);
     });
   });
@@ -397,112 +444,16 @@ async function handleEvent(event: ChatEvent): Promise<void> {
 
   const messageName = event.message?.name;
 
-  // Concurrency guard for regular (non-btw) messages
-  // IMPORTANT: acquire inFlight immediately after check, before any await,
-  // to prevent heartbeat from slipping in during the gap
-  if (!isBtw && inFlight.has(spaceName)) {
-    await sendMessage(spaceName, "I'm still working on something — prefix with `btw` to run a parallel task.");
-    if (messageName) await reactToMessage(messageName, "🕐");
-    return;
-  }
-  if (!isBtw) inFlight.add(spaceName);
-
-  try {
-    // React 👀 before processing
-    if (messageName) await reactToMessage(messageName, "👀");
-
-    // Command routing (text-only, skip if just attachments)
-    if (textInput === "/reset") {
-      // Flush memories before reset
-      const sessionId = getSession(spaceName);
-      if (sessionId) {
-        const today = new Date().toISOString().split("T")[0];
-        const flushPrompt = `This session is about to reset. Review the conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
-        try {
-          const flushResult = await callClaude(flushPrompt, spaceName);
-          if (!flushResult.includes("MEMORY_FLUSH_NONE")) {
-            await sendMessage(spaceName, "Saved memories before reset.");
-          }
-        } catch (err) {
-          logError("[memory flush] failed (non-fatal):", err);
-        }
-      }
-      deleteSession(spaceName);
-      await sendMessage(
-        spaceName,
-        "Session reset. Next message starts a fresh conversation.",
-      );
-    } else if (
-      textInput === "/schedules" ||
-      textInput.startsWith("/schedule ") ||
-      textInput.startsWith("/unschedule ")
-    ) {
-      const result = handleScheduleCommand(textInput, spaceName);
-      await sendMessage(spaceName, result);
-    } else if (textInput === "/telos") {
-      await sendMessage(spaceName, getTelosSummary());
-    } else if (textInput.startsWith("/telos ")) {
-      const fileName = textInput.slice("/telos ".length).trim();
-      const content = getTelosFile(fileName);
-      if (content) {
-        await sendMessage(spaceName, content);
-      } else {
-        await sendMessage(spaceName, `TELOS file \`${fileName}\` not found. Use \`/telos\` to list available files.`);
-      }
-    } else if (textInput === "/timezone") {
-      await sendMessage(spaceName, `Current timezone: \`${getTimezone()}\`\nChange with: \`/timezone America/New_York\``);
-    } else if (textInput.startsWith("/timezone ")) {
-      const tz = textInput.slice("/timezone ".length).trim();
-      try {
-        // Validate the timezone by attempting to use it
-        new Date().toLocaleString("en-US", { timeZone: tz });
-        setTimezone(tz);
-        await sendMessage(spaceName, `Timezone set to \`${tz}\``);
-      } catch {
-        await sendMessage(spaceName, `Invalid timezone: \`${tz}\`. Use IANA format like \`America/Los_Angeles\`, \`America/Denver\`, \`US/Eastern\`.`);
-      }
-    } else if (textInput === "/heartbeat" && heartbeatConfig) {
-      await sendMessage(spaceName, getHeartbeatStatus(heartbeatConfig));
-    } else if (textInput === "/memory") {
-      await sendMessage(spaceName, listMemoryFiles());
-    } else if (textInput.startsWith("/memory search ")) {
-      const query = textInput.slice("/memory search ".length).trim();
-      if (!query) {
-        await sendMessage(spaceName, "Usage: `/memory search <query>`");
-      } else {
-        const results = searchMemory(query);
-        if (results.length === 0) {
-          await sendMessage(spaceName, `No memory matches for "${query}".`);
-        } else {
-          const formatted = results
-            .map((r, i) => `*${i + 1}.* \`${r.file}\` (score: ${r.score.toFixed(2)})\n${r.snippet}`)
-            .join("\n\n");
-          await sendMessage(spaceName, formatted);
-        }
-      }
-    } else if (textInput === "/memory flush") {
-      const sessionId = getSession(spaceName);
-      if (!sessionId) {
-        await sendMessage(spaceName, "No active session to flush.");
-      } else {
-        const today = new Date().toISOString().split("T")[0];
-        const flushPrompt = `Review this conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
-        const flushResult = await callClaude(flushPrompt, spaceName);
-        if (flushResult.includes("MEMORY_FLUSH_NONE")) {
-          await sendMessage(spaceName, "Nothing new to save.");
-        } else {
-          await sendMessage(spaceName, "Memories saved.");
-        }
-      }
-    } else {
-      // Process attachments and build final input
+  // btw messages bypass orchestrator entirely — unchanged ephemeral behavior
+  if (isBtw) {
+    try {
+      if (messageName) await reactToMessage(messageName, "👀");
       const attachmentPrefix = await processAttachments(attachments);
       const telosContext = loadTelosContext();
       const memoryContext = loadMemoryContext();
       const datetime = getCurrentDatetime();
       const input = [datetime, telosContext, memoryContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
 
-      // Claude bridge
       const reactedEmojis = new Set<string>();
       const response = await callClaude(input, spaceName, (toolName) => {
         const emoji = toolEmoji[toolName];
@@ -510,21 +461,250 @@ async function handleEvent(event: ChatEvent): Promise<void> {
           reactedEmojis.add(emoji);
           reactToMessage(messageName, emoji);
         }
-      }, isBtw);
-      await sendMessage(spaceName, response);
+      }, true); // ephemeral
+      await sendMessage(spaceName, response.text);
+      if (messageName) await reactToMessage(messageName, "✅");
+    } catch (err: any) {
+      logError(`Error handling btw message:`, err);
+      if (messageName) await reactToMessage(messageName, "❌");
+      await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(() => {});
+    }
+    return;
+  }
+
+  // Command routing (text-only, no orchestrator involvement)
+  if (textInput.startsWith("/")) {
+    try {
+      if (messageName) await reactToMessage(messageName, "👀");
+
+      if (textInput === "/reset" || textInput === "/clear") {
+        // Flush memories using most recent thread's session
+        const recentThread = getMostRecentThread(spaceName);
+        const sessionId = recentThread?.sessionId ?? getSession(spaceName);
+        if (sessionId) {
+          const today = new Date().toISOString().split("T")[0];
+          const flushPrompt = `This session is about to reset. Review the conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
+          try {
+            const flushResult = await callClaude(flushPrompt, spaceName, undefined, false, sessionId);
+            if (!flushResult.text.includes("MEMORY_FLUSH_NONE")) {
+              await sendMessage(spaceName, "Saved memories before reset.");
+            }
+          } catch (err) {
+            logError("[memory flush] failed (non-fatal):", err);
+          }
+        }
+        clearThreadsForSpace(spaceName);
+        deleteSession(spaceName);
+        await sendMessage(spaceName, "Session reset. All threads cleared. Next message starts fresh.");
+      } else if (textInput === "/threads") {
+        await sendMessage(spaceName, formatThreadList(spaceName));
+      } else if (
+        textInput === "/schedules" ||
+        textInput.startsWith("/schedule ") ||
+        textInput.startsWith("/unschedule ")
+      ) {
+        const result = handleScheduleCommand(textInput, spaceName);
+        await sendMessage(spaceName, result);
+      } else if (textInput === "/telos") {
+        await sendMessage(spaceName, getTelosSummary());
+      } else if (textInput.startsWith("/telos ")) {
+        const fileName = textInput.slice("/telos ".length).trim();
+        const content = getTelosFile(fileName);
+        if (content) {
+          await sendMessage(spaceName, content);
+        } else {
+          await sendMessage(spaceName, `TELOS file \`${fileName}\` not found. Use \`/telos\` to list available files.`);
+        }
+      } else if (textInput === "/timezone") {
+        await sendMessage(spaceName, `Current timezone: \`${getTimezone()}\`\nChange with: \`/timezone America/New_York\``);
+      } else if (textInput.startsWith("/timezone ")) {
+        const tz = textInput.slice("/timezone ".length).trim();
+        try {
+          new Date().toLocaleString("en-US", { timeZone: tz });
+          setTimezone(tz);
+          await sendMessage(spaceName, `Timezone set to \`${tz}\``);
+        } catch {
+          await sendMessage(spaceName, `Invalid timezone: \`${tz}\`. Use IANA format like \`America/Los_Angeles\`, \`America/Denver\`, \`US/Eastern\`.`);
+        }
+      } else if (textInput === "/heartbeat" && heartbeatConfig) {
+        await sendMessage(spaceName, getHeartbeatStatus(heartbeatConfig));
+      } else if (textInput === "/memory") {
+        await sendMessage(spaceName, listMemoryFiles());
+      } else if (textInput.startsWith("/memory search ")) {
+        const query = textInput.slice("/memory search ".length).trim();
+        if (!query) {
+          await sendMessage(spaceName, "Usage: `/memory search <query>`");
+        } else {
+          const results = searchMemory(query);
+          if (results.length === 0) {
+            await sendMessage(spaceName, `No memory matches for "${query}".`);
+          } else {
+            const formatted = results
+              .map((r, i) => `*${i + 1}.* \`${r.file}\` (score: ${r.score.toFixed(2)})\n${r.snippet}`)
+              .join("\n\n");
+            await sendMessage(spaceName, formatted);
+          }
+        }
+      } else if (textInput === "/memory flush") {
+        const recentThread = getMostRecentThread(spaceName);
+        const sessionId = recentThread?.sessionId ?? getSession(spaceName);
+        if (!sessionId) {
+          await sendMessage(spaceName, "No active session to flush.");
+        } else {
+          const today = new Date().toISOString().split("T")[0];
+          const flushPrompt = `Review this conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
+          const flushResult = await callClaude(flushPrompt, spaceName, undefined, false, sessionId);
+          if (flushResult.text.includes("MEMORY_FLUSH_NONE")) {
+            await sendMessage(spaceName, "Nothing new to save.");
+          } else {
+            await sendMessage(spaceName, "Memories saved.");
+          }
+        }
+      } else {
+        // Unknown command — fall through to regular message handling below
+        await handleRegularMessage(spaceName, textInput, attachments, messageName);
+        return;
+      }
+
+      if (messageName) await reactToMessage(messageName, "✅");
+    } catch (err: any) {
+      logError(`Error handling command:`, err);
+      if (messageName) await reactToMessage(messageName, "❌");
+      await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(() => {});
+    }
+    return;
+  }
+
+  // Regular message — route through orchestrator
+  await handleRegularMessage(spaceName, textInput, attachments, messageName);
+}
+
+async function handleRegularMessage(
+  spaceName: string,
+  textInput: string,
+  attachments: NonNullable<ChatEvent["message"]>["attachment"],
+  messageName?: string,
+): Promise<void> {
+  // Download attachments before routing (file paths must be stable for queueing)
+  const attachmentPrefix = await processAttachments(attachments);
+
+  // Route to thread
+  const threadId = await routeMessage(textInput, spaceName);
+
+  // Build full input
+  const telosContext = loadTelosContext();
+  const memoryContext = loadMemoryContext();
+  const datetime = getCurrentDatetime();
+  const input = [datetime, telosContext, memoryContext, attachmentPrefix, textInput].filter(Boolean).join("\n\n");
+
+  // If thread is busy, enqueue
+  if (isThreadBusy(threadId)) {
+    enqueueMessage({
+      threadId,
+      spaceName,
+      message: input,
+      textInput,
+      messageName,
+      timestamp: new Date().toISOString(),
+    });
+    await sendMessage(spaceName, "I'm still working on something — your message is queued and will be processed next.");
+    if (messageName) await reactToMessage(messageName, "🕐");
+    return;
+  }
+
+  // Process immediately
+  markBusy(threadId);
+  inFlight.add(threadId);
+
+  try {
+    if (messageName) await reactToMessage(messageName, "👀");
+
+    const threadSessionId = getThreadSession(threadId);
+    const reactedEmojis = new Set<string>();
+    const response = await callClaude(input, spaceName, (toolName) => {
+      const emoji = toolEmoji[toolName];
+      if (emoji && messageName && !reactedEmojis.has(emoji)) {
+        reactedEmojis.add(emoji);
+        reactToMessage(messageName, emoji);
+      }
+    }, false, threadSessionId);
+
+    await sendMessage(spaceName, response.text);
+
+    // Persist session to thread and also update spaceName default
+    if (response.sessionId) {
+      setThreadSession(threadId, response.sessionId);
+      setSession(spaceName, response.sessionId);
     }
 
-    // React ✅ on success
+    // Update thread summary (fire-and-forget)
+    updateSummary(threadId, textInput, response.text).catch((err) => {
+      logError("[summary] update failed (non-fatal):", err);
+    });
+
     if (messageName) await reactToMessage(messageName, "✅");
   } catch (err: any) {
     logError(`Error handling message:`, err);
-    // React ❌ on error
     if (messageName) await reactToMessage(messageName, "❌");
-    await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(
-      () => {},
-    );
+    await sendMessage(spaceName, `Error: ${err.message ?? err}`).catch(() => {});
   } finally {
-    if (!isBtw) inFlight.delete(spaceName);
+    markIdle(threadId);
+    inFlight.delete(threadId);
+    pruneStaleThreads(spaceName);
+
+    // Process next queued message for this thread
+    const next = dequeueNext(threadId);
+    if (next) {
+      processQueuedMessage(threadId, next);
+    }
+  }
+}
+
+async function processQueuedMessage(
+  threadId: string,
+  item: QueueItem,
+): Promise<void> {
+  if (item.messageName) await reactToMessage(item.messageName, "👀");
+
+  markBusy(threadId);
+  inFlight.add(threadId);
+
+  try {
+    const threadSessionId = getThreadSession(threadId);
+    const reactedEmojis = new Set<string>();
+    const response = await callClaude(item.message, item.spaceName, (toolName) => {
+      const emoji = toolEmoji[toolName];
+      if (emoji && item.messageName && !reactedEmojis.has(emoji)) {
+        reactedEmojis.add(emoji);
+        reactToMessage(item.messageName!, emoji);
+      }
+    }, false, threadSessionId);
+
+    await sendMessage(item.spaceName, response.text);
+
+    if (response.sessionId) {
+      setThreadSession(threadId, response.sessionId);
+      setSession(item.spaceName, response.sessionId);
+    }
+
+    updateSummary(threadId, item.textInput, response.text).catch((err) => {
+      logError("[summary] update failed (non-fatal):", err);
+    });
+
+    if (item.messageName) await reactToMessage(item.messageName, "✅");
+  } catch (err: any) {
+    logError(`Error processing queued message:`, err);
+    if (item.messageName) await reactToMessage(item.messageName, "❌");
+    await sendMessage(item.spaceName, `Error: ${err.message ?? err}`).catch(() => {});
+  } finally {
+    markIdle(threadId);
+    inFlight.delete(threadId);
+
+    // Chain: process next queued message if any
+    const next = dequeueNext(threadId);
+    if (next) {
+      processQueuedMessage(threadId, next);
+    }
   }
 }
 
@@ -532,6 +712,7 @@ async function handleEvent(event: ChatEvent): Promise<void> {
 
 async function main(): Promise<void> {
   loadSessions();
+  initOrchestrator(inFlight);
   loadSchedules();
 
   const subscription = pubsub.subscription(SUBSCRIPTION!);

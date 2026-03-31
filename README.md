@@ -10,7 +10,7 @@ It's not currently self-editing like OpenClaw. I like it this way for security/r
 
 ## Features
 
-- **Persistent sessions** — each Chat space maintains its own conversation history with Claude
+- **Multi-threaded sessions** — automatic conversation threading with per-thread session persistence, message queueing, and haiku-powered routing
 - **Emoji reactions** *(optional)* — reacts with tool-specific emoji as Claude works (requires Domain-Wide Delegation)
 - **Scheduled prompts** — set up cron-based recurring prompts (e.g., daily briefings)
 - **Message chunking** — long responses are automatically split to fit Google Chat's message limits
@@ -27,8 +27,9 @@ Google Chat → Pub/Sub Topic → claude-code-claw → Claude Code CLI → Googl
 
 1. A Google Chat app is configured to publish events to a Pub/Sub topic
 2. This agent subscribes to the topic and receives messages in real-time
-3. Messages are forwarded to Claude Code CLI (`claude -p`) with session persistence
-4. Claude's responses are sent back to the originating Chat space via the Google Chat API
+3. An orchestrator routes messages to the appropriate conversation thread (or creates a new one)
+4. Messages are forwarded to Claude Code CLI (`claude -p`) with per-thread session persistence
+5. Claude's responses are sent back to the originating Chat space via the Google Chat API
 
 ## Quick Start
 
@@ -98,7 +99,7 @@ cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
 cp tool-emoji.example.json tool-emoji.json
-mkdir -p data/memory/daily
+mkdir -p data/memory/daily data/sessions
 mkdir -p data/telos && cp telos/*.md data/telos/
 cp heartbeat.example.md data/heartbeat.md
 ```
@@ -141,7 +142,8 @@ If `REACTION_USER_EMAIL` is not set, reactions are silently disabled — everyth
 
 | Command | Description |
 |---|---|
-| `/reset` | Clear the current session and start fresh |
+| `/reset` | Clear all threads and sessions, start fresh |
+| `/threads` | List active conversation threads with summaries |
 | `/schedule "<cron>" <prompt>` | Schedule a recurring prompt (e.g., `/schedule "0 9 * * *" morning briefing`) |
 | `/schedules` | List active schedules in the current space |
 | `/unschedule <id>` | Delete a schedule by ID |
@@ -156,19 +158,21 @@ If `REACTION_USER_EMAIL` is not set, reactions are silently disabled — everyth
 
 ```
 src/
-  main.ts        # Pub/Sub listener, message routing, Claude bridge
-  sessions.ts    # Per-space session persistence
-  scheduler.ts   # Cron-based scheduled prompts
-  memory.ts      # Persistent memory loading, search, and context injection
-  telos.ts       # TELOS context loading module
-  heartbeat.ts   # Periodic heartbeat checks
-  log.ts         # Timestamped logging with file tee
-telos/           # TELOS template files (checked into repo)
-data/            # Runtime data (gitignored)
-  logs/          # Rolling application log
-  memory/        # Persistent memory files (gitignored)
-    daily/       # Daily log files (YYYY-MM-DD.md)
-  telos/         # Your personal TELOS files (gitignored)
+  main.ts          # Pub/Sub listener, message routing, Claude bridge
+  orchestrator.ts  # Multi-thread routing, queueing, and lifecycle
+  sessions.ts      # Per-space session persistence (heartbeat compat)
+  scheduler.ts     # Cron-based scheduled prompts
+  memory.ts        # Persistent memory loading, search, and context injection
+  telos.ts         # TELOS context loading module
+  heartbeat.ts     # Periodic heartbeat checks
+  log.ts           # Timestamped logging with file tee
+telos/             # TELOS template files (checked into repo)
+data/              # Runtime data (gitignored)
+  sessions/        # Thread registry and message queue
+  logs/            # Rolling application log
+  memory/          # Persistent memory files (gitignored)
+    daily/         # Daily log files (YYYY-MM-DD.md)
+  telos/           # Your personal TELOS files (gitignored)
 .claude/
   commands/
     setup.md     # Interactive setup guide (run with `claude /setup`)
@@ -191,6 +195,16 @@ The bot has a file-based memory system at `data/memory/` that persists across se
 - **Search** — `/memory search <query>` does keyword search across all memory files
 
 The `CLAUDE.example.md` template includes instructions for the bot on when and how to write memories. Customize `CLAUDE.md` to adjust these rules.
+
+### Threading
+
+The bot automatically manages multiple conversation threads per Chat space. Instead of a single session per space, an orchestrator routes each message to the correct thread based on topic.
+
+- **Automatic routing** — with 0 threads, a new one is created. With 1 thread, messages go there. With 2+ threads, a fast haiku call picks the best match or creates a new thread.
+- **Message queueing** — if a thread is busy when a new message arrives for it, the message is queued with a 🕐 reaction and processed automatically when the thread finishes.
+- **Thread lifecycle** — idle threads are pruned after 4 hours, with a maximum of 8 threads per space. Use `/threads` to see active threads and `/reset` to clear all.
+- **`btw` prefix** — messages prefixed with `btw ` bypass threading entirely and run as ephemeral parallel tasks (no session, no thread).
+- **Backward compatible** — heartbeat, scheduled tasks, and memory flush all work unchanged. The most recent thread's session is used as the "default session" for the space.
 
 ### TELOS Personal Context
 

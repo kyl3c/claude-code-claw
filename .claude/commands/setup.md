@@ -113,8 +113,9 @@ Skip this step entirely. Do NOT copy `tool-emoji.example.json`. No DWD setup nee
 cp .env.example .env
 cp CLAUDE.example.md CLAUDE.md
 cp SOUL.example.md SOUL.md
-mkdir -p data/workspace
+mkdir -p data/workspace data/workspace/user-files
 mkdir -p data/memory/daily
+mkdir -p data/sessions
 mkdir -p data/telos && cp telos/*.md data/telos/
 ```
 
