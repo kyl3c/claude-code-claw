@@ -233,6 +233,11 @@ function splitMessage(text: string, maxLen: number): string[] {
   return chunks;
 }
 
+function isSilent(response: string): boolean {
+  const trimmed = response.trim();
+  return !trimmed || /^silent$/i.test(trimmed);
+}
+
 async function sendMessage(spaceName: string, text: string): Promise<void> {
   const chunks = splitMessage(text, MAX_MESSAGE_LENGTH);
   for (const chunk of chunks) {
@@ -462,7 +467,11 @@ async function handleEvent(event: ChatEvent): Promise<void> {
           reactToMessage(messageName, emoji);
         }
       }, true); // ephemeral
-      await sendMessage(spaceName, response.text);
+      if (!isSilent(response.text)) {
+        await sendMessage(spaceName, response.text);
+      } else {
+        log(`[send] silent — suppressed for ${spaceName}`);
+      }
       if (messageName) await reactToMessage(messageName, "✅");
     } catch (err: any) {
       logError(`Error handling btw message:`, err);
@@ -629,7 +638,11 @@ async function handleRegularMessage(
       }
     }, false, threadSessionId);
 
-    await sendMessage(spaceName, response.text);
+    if (!isSilent(response.text)) {
+      await sendMessage(spaceName, response.text);
+    } else {
+      log(`[send] silent — suppressed for ${spaceName}`);
+    }
 
     // Persist session to thread and also update spaceName default
     if (response.sessionId) {
@@ -680,7 +693,11 @@ async function processQueuedMessage(
       }
     }, false, threadSessionId);
 
-    await sendMessage(item.spaceName, response.text);
+    if (!isSilent(response.text)) {
+      await sendMessage(item.spaceName, response.text);
+    } else {
+      log(`[send] silent — suppressed for ${item.spaceName}`);
+    }
 
     if (response.sessionId) {
       setThreadSession(threadId, response.sessionId);
