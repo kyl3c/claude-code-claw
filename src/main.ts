@@ -150,6 +150,29 @@ async function callClaudeGuarded(
   }
 }
 
+type FlushOutcome = "saved" | "nothing" | "no-session" | "error";
+
+async function flushMemoryForSpace(
+  spaceName: string,
+  opts: { aboutToReset: boolean },
+): Promise<FlushOutcome> {
+  const recentThread = getMostRecentThread(spaceName);
+  const sessionId = recentThread?.sessionId ?? getSession(spaceName);
+  if (!sessionId) return "no-session";
+  const today = new Date().toISOString().split("T")[0];
+  const prefix = opts.aboutToReset
+    ? "This session is about to reset. Review the conversation"
+    : "Review this conversation";
+  const flushPrompt = `${prefix} and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
+  try {
+    const flushResult = await callClaude(flushPrompt, spaceName, undefined, false, sessionId);
+    return flushResult.text.includes("MEMORY_FLUSH_NONE") ? "nothing" : "saved";
+  } catch (err) {
+    logError("[memory flush] failed (non-fatal):", err);
+    return "error";
+  }
+}
+
 // --- Attachments ---
 
 async function downloadAttachment(
@@ -487,20 +510,9 @@ async function handleEvent(event: ChatEvent): Promise<void> {
       if (messageName) await reactToMessage(messageName, "👀");
 
       if (textInput === "/reset" || textInput === "/clear") {
-        // Flush memories using most recent thread's session
-        const recentThread = getMostRecentThread(spaceName);
-        const sessionId = recentThread?.sessionId ?? getSession(spaceName);
-        if (sessionId) {
-          const today = new Date().toISOString().split("T")[0];
-          const flushPrompt = `This session is about to reset. Review the conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
-          try {
-            const flushResult = await callClaude(flushPrompt, spaceName, undefined, false, sessionId);
-            if (!flushResult.text.includes("MEMORY_FLUSH_NONE")) {
-              await sendMessage(spaceName, "Saved memories before reset.");
-            }
-          } catch (err) {
-            logError("[memory flush] failed (non-fatal):", err);
-          }
+        const outcome = await flushMemoryForSpace(spaceName, { aboutToReset: true });
+        if (outcome === "saved") {
+          await sendMessage(spaceName, "Saved memories before reset.");
         }
         clearThreadsForSpace(spaceName);
         deleteSession(spaceName);
@@ -555,19 +567,15 @@ async function handleEvent(event: ChatEvent): Promise<void> {
           }
         }
       } else if (textInput === "/memory flush") {
-        const recentThread = getMostRecentThread(spaceName);
-        const sessionId = recentThread?.sessionId ?? getSession(spaceName);
-        if (!sessionId) {
+        const outcome = await flushMemoryForSpace(spaceName, { aboutToReset: false });
+        if (outcome === "no-session") {
           await sendMessage(spaceName, "No active session to flush.");
+        } else if (outcome === "nothing") {
+          await sendMessage(spaceName, "Nothing new to save.");
+        } else if (outcome === "saved") {
+          await sendMessage(spaceName, "Memories saved.");
         } else {
-          const today = new Date().toISOString().split("T")[0];
-          const flushPrompt = `Review this conversation and save any important preferences, decisions, facts, or action items to the appropriate file in data/memory/ (preferences.md, decisions.md, facts.md, or daily/${today}.md). Use the Write or Edit tool. If nothing worth saving, reply with just: MEMORY_FLUSH_NONE`;
-          const flushResult = await callClaude(flushPrompt, spaceName, undefined, false, sessionId);
-          if (flushResult.text.includes("MEMORY_FLUSH_NONE")) {
-            await sendMessage(spaceName, "Nothing new to save.");
-          } else {
-            await sendMessage(spaceName, "Memories saved.");
-          }
+          await sendMessage(spaceName, "Memory flush failed — see logs.");
         }
       } else {
         // Unknown command — fall through to regular message handling below
@@ -740,7 +748,21 @@ async function main(): Promise<void> {
     logError("Pub/Sub subscription error:", err);
   });
 
-  startSchedulerLoop(sendMessage, MODEL, CLAUDE_TIMEOUT_MS, inFlight);
+  startSchedulerLoop(
+    sendMessage,
+    MODEL,
+    CLAUDE_TIMEOUT_MS,
+    inFlight,
+    async (spaceName) => {
+      try {
+        await flushMemoryForSpace(spaceName, { aboutToReset: true });
+      } catch (err) {
+        logError("[nightly flush] error (clearing anyway):", err);
+      }
+      clearThreadsForSpace(spaceName);
+      deleteSession(spaceName);
+    },
+  );
 
   if (heartbeatConfig) {
     startHeartbeatLoop(heartbeatConfig, callClaudeGuarded, sendMessage);

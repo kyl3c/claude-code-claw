@@ -15,6 +15,8 @@ interface Schedule {
   spaceName: string;
   enabled: boolean;
   nextRun: string;
+  /** If true, runs memory flush + session clear instead of invoking a prompt. Silent — no chat message. */
+  clearSession?: boolean;
 }
 
 function readSchedules(): Schedule[] {
@@ -227,6 +229,7 @@ export function startSchedulerLoop(
   model: string,
   timeoutMs: number = 10 * 60 * 1000,
   inFlight?: Set<string>,
+  flushAndClearFn?: (spaceName: string) => Promise<void>,
 ): void {
   async function tick() {
     const schedules = readSchedules();
@@ -245,6 +248,32 @@ export function startSchedulerLoop(
       // Skip if another caller (heartbeat, user message) is using this space
       if (inFlight?.has(schedule.spaceName)) {
         log(`Schedule #${schedule.id}: skipped (space busy), will retry next tick`);
+        continue;
+      }
+
+      if (schedule.clearSession) {
+        log(`Schedule #${schedule.id}: nightly flush+clear for ${schedule.spaceName}`);
+        inFlight?.add(schedule.spaceName);
+        try {
+          if (flushAndClearFn) {
+            await flushAndClearFn(schedule.spaceName);
+            log(`Schedule #${schedule.id}: flush+clear complete`);
+          } else {
+            logError(`Schedule #${schedule.id}: clearSession set but no flushAndClearFn provided`);
+          }
+        } catch (err: any) {
+          logError(`Schedule #${schedule.id} flush+clear error:`, err.message ?? err);
+          // Silent by design — no chat message
+        } finally {
+          inFlight?.delete(schedule.spaceName);
+        }
+        try {
+          schedule.nextRun = computeNextRun(schedule.cron);
+          dirty = true;
+        } catch {
+          schedule.enabled = false;
+          dirty = true;
+        }
         continue;
       }
 
