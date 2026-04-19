@@ -5,6 +5,12 @@ import { CronExpressionParser } from 'cron-parser';
 import { loadTelosContext, getCurrentDatetime } from './telos.js';
 import { loadMemoryContext } from './memory.js';
 import { log, logError } from './log.js';
+import {
+  ensureThread,
+  getThreadSession,
+  setThreadSession,
+  updateSummary,
+} from './orchestrator.js';
 
 const SCHEDULES_PATH = 'data/schedules.json';
 
@@ -107,17 +113,21 @@ const SCHEDULER_TIMEOUT_MS = Number(process.env.SCHEDULER_TIMEOUT_MS) || 5 * 60 
 
 const MCP_HEADLESS_CONFIG = 'mcp-headless.json';
 
-function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number): Promise<{ text: string; toolCount: number; elapsed: number }> {
+function runClaude(model: string, input: string, timeoutMs: number, scheduleId?: number, resumeSessionId?: string): Promise<{ text: string; toolCount: number; elapsed: number; sessionId?: string }> {
   const tag = scheduleId != null ? `[schedule #${scheduleId}]` : '[scheduler]';
   const startTime = Date.now();
   const args = ['-p', '--model', model, '--output-format', 'stream-json', '--verbose', '--append-system-prompt-file', 'SOUL.md', '--strict-mcp-config', '--mcp-config', MCP_HEADLESS_CONFIG];
+  if (resumeSessionId) {
+    args.push('--resume', resumeSessionId);
+  }
 
-  return new Promise<{ text: string; toolCount: number; elapsed: number }>((resolve, reject) => {
+  return new Promise<{ text: string; toolCount: number; elapsed: number; sessionId?: string }>((resolve, reject) => {
     const proc = spawn('claude', args, { cwd: process.cwd() });
     proc.stdin.write(input);
     proc.stdin.end();
 
     let resultText: string | undefined;
+    let resultSessionId: string | undefined;
     let buffer = '';
     let timedOut = false;
     let lastActivity = Date.now();
@@ -183,6 +193,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
         } else if (msg.type === 'result') {
           lastProgress = Date.now();
           resultText = msg.result;
+          resultSessionId = msg.session_id;
         }
       } catch {
         // skip unparseable lines
@@ -209,7 +220,7 @@ function runClaude(model: string, input: string, timeoutMs: number, scheduleId?:
       if (buffer.trim()) processLine(buffer);
 
       if (resultText !== undefined) {
-        resolve({ text: resultText, toolCount, elapsed: Date.now() - startTime });
+        resolve({ text: resultText, toolCount, elapsed: Date.now() - startTime, sessionId: resultSessionId });
       } else {
         reject(new Error(`Claude exited with code ${code} and no output`));
       }
@@ -285,19 +296,36 @@ export function startSchedulerLoop(
         const datetime = getCurrentDatetime();
         const promptWithContext = [datetime, telosContext, memoryContext, schedule.prompt].filter(Boolean).join('\n\n');
 
-        let result: { text: string; toolCount: number; elapsed: number } | undefined;
+        // Pinned thread per schedule. Gives cron runs session continuity and
+        // lets the orchestrator route user replies back to this conversation.
+        const threadId = `schedule_${schedule.id}`;
+        ensureThread(threadId, schedule.spaceName);
+        let sessionIdToUse = getThreadSession(threadId);
+
+        let result: { text: string; toolCount: number; elapsed: number; sessionId?: string } | undefined;
         let lastErr: Error | undefined;
         const MAX_ATTEMPTS = 3;
         for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
           try {
-            result = await runClaude(model, promptWithContext, SCHEDULER_TIMEOUT_MS, schedule.id);
+            result = await runClaude(model, promptWithContext, SCHEDULER_TIMEOUT_MS, schedule.id, sessionIdToUse);
             break;
           } catch (err: any) {
             lastErr = err;
-            const isStall = String(err.message ?? '').includes('stall') || String(err.message ?? '').includes('timed out') || String(err.message ?? '').includes('no progress');
-            if (attempt < MAX_ATTEMPTS && isStall) {
-              log(`Schedule #${schedule.id}: stalled, retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
-              continue;
+            const msg = String(err.message ?? '');
+            const isStall = msg.includes('stall') || msg.includes('timed out') || msg.includes('no progress');
+            const isNoOutput = msg.includes('no output');
+            if (attempt < MAX_ATTEMPTS) {
+              // Stale-session case: had a session, got no output. Drop the session
+              // and retry fresh. Mirrors callClaude's stale-session handling.
+              if (sessionIdToUse && isNoOutput) {
+                log(`Schedule #${schedule.id}: session ${sessionIdToUse} looks stale, retrying without resume`);
+                sessionIdToUse = undefined;
+                continue;
+              }
+              if (isStall) {
+                log(`Schedule #${schedule.id}: stalled, retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`);
+                continue;
+              }
             }
             break;
           }
@@ -305,6 +333,14 @@ export function startSchedulerLoop(
 
         if (result !== undefined) {
           log(`Schedule #${schedule.id} completed (${result.toolCount} tools, ${(result.elapsed / 1000).toFixed(0)}s)`);
+          if (result.sessionId) {
+            setThreadSession(threadId, result.sessionId);
+          }
+          // Fire-and-forget: keep the thread summary current so haiku routing
+          // can match user replies back to this cron conversation.
+          updateSummary(threadId, schedule.prompt, result.text).catch((err) => {
+            logError(`Schedule #${schedule.id} summary update failed (non-fatal):`, err);
+          });
           await sendFn(schedule.spaceName, result.text);
         } else {
           const rawMsg = String(lastErr?.message ?? lastErr);

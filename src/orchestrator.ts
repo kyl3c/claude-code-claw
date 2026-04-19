@@ -124,6 +124,26 @@ export function createThread(spaceName: string): Thread {
   return thread;
 }
 
+/**
+ * Create-or-return a thread with an explicit id (e.g., "schedule_3").
+ * Used by the scheduler to give each cron schedule a stable, named thread.
+ */
+export function ensureThread(id: string, spaceName: string): Thread {
+  const existing = getThread(id);
+  if (existing) return existing;
+  const thread: Thread = {
+    id,
+    spaceName,
+    summary: "",
+    status: "idle",
+    lastActive: new Date().toISOString(),
+  };
+  threads.push(thread);
+  saveThreads();
+  log(`[orchestrator] ensured thread ${thread.id} for ${spaceName}`);
+  return thread;
+}
+
 export function getThread(threadId: string): Thread | undefined {
   return threads.find((t) => t.id === threadId);
 }
@@ -332,6 +352,9 @@ export function pruneStaleThreads(spaceName: string): void {
   threads = threads.filter((t) => {
     if (t.spaceName !== spaceName) return true;
     if (t.status === "busy") return true;
+    // Scheduler-owned threads are pinned: exempt from idle pruning.
+    // They're cleared wholesale by the nightly flush via clearThreadsForSpace.
+    if (t.id.startsWith("schedule_")) return true;
     const age = now - new Date(t.lastActive).getTime();
     if (age > staleMs) {
       log(`[orchestrator] pruned stale thread ${t.id} (idle ${(age / 3600000).toFixed(1)}h)`);
@@ -340,9 +363,10 @@ export function pruneStaleThreads(spaceName: string): void {
     return true;
   });
 
-  // Cap per-space threads (keep most recent)
+  // Cap per-space threads (keep most recent). Scheduler threads don't count
+  // toward the cap and are never evicted here.
   const spaceThreads = threads
-    .filter((t) => t.spaceName === spaceName)
+    .filter((t) => t.spaceName === spaceName && !t.id.startsWith("schedule_"))
     .sort(
       (a, b) =>
         new Date(b.lastActive).getTime() - new Date(a.lastActive).getTime(),
